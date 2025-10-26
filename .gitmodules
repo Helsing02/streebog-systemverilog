@@ -1,0 +1,3 @@
+[submodule "sw"]
+	path = sw
+	url = https://github.com/Helsing02/stribog-hash.git
