@@ -1,4 +1,6 @@
-module lpsx_transform (
+module lpsx_transform # (
+    parameter USE_S_RE = 1          // 1 -> use s_transform_rc module, 0 -> use naive method
+)(
     input  logic [511:0] i_data_a,  // Input data block A
     input  logic [511:0] i_data_b,  // Input data block B
     output logic [511:0] o_data     // Output transformed data block
@@ -12,21 +14,23 @@ logic [511:0] o_permutation;
 assign xor_res = i_data_a ^ i_data_b;
 
 // Instantiate substitution transform module
-s_transform S_instance (
-    .i_data(xor_res),
-    .o_data(o_substitution)
+s_transform # (
+    .USE_S_RE(USE_S_RE)
+) S_instance (
+    .i_data  (xor_res),
+    .o_data  (o_substitution)
 );
 
 // Instantiate permutation transform module
 p_transform P_instance (
-    .i_data(o_substitution),
-    .o_data(o_permutation)
+    .i_data  (o_substitution),
+    .o_data  (o_permutation)
 );
 
 // Instantiate linear transform module
 l_transform L_instance (
-    .i_data(o_permutation),
-    .o_data(o_data)
+    .i_data  (o_permutation),
+    .o_data  (o_data)
 );
 
 endmodule : lpsx_transform

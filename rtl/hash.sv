@@ -1,4 +1,6 @@
-module hash (
+module hash # (
+    parameter USE_S_RE = 1              // 1 -> use s_transform_rc module, 0 -> use naive method
+)(
     input logic clk,                    // Clock
     input logic rst_n,                  // Synchronous reset active low
 
@@ -231,7 +233,9 @@ logic [511:0] s_axis_m_tdata;
 logic         s_axis_m_tvalid;
 logic         s_axis_m_tready;
 
-g_transform g_instance (
+g_transform # (
+    .USE_S_RE       (USE_S_RE)
+) g_instance (
     .clk            (clk),
     .rst_n          (rst_n),
 

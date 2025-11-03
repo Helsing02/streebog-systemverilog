@@ -1,4 +1,6 @@
-module g_transform (
+module g_transform # (
+    parameter USE_S_RE = 1                  // 1 -> use s_transform_rc module, 0 -> use naive method
+)(
     input logic clk,                        // Clock
     input logic rst_n,                      // Synchronous reset active low
 
@@ -220,13 +222,17 @@ always_ff @(posedge clk) begin : proc_o_h_data
 end
 
 // Instantite two LPSX
-lpsx_transform lpsx_for_key (
+lpsx_transform # (
+    .USE_S_RE(USE_S_RE)
+) lpsx_for_key (
     .i_data_a(i_data_a_key),
     .i_data_b(i_data_b_key),
     .o_data  (o_data_key)
 );
 
-lpsx_transform lpsx_for_m (
+lpsx_transform # (
+    .USE_S_RE(USE_S_RE)
+) lpsx_for_m (
     .i_data_a(m_reg),
     .i_data_b(key_reg),
     .o_data  (o_data_m)

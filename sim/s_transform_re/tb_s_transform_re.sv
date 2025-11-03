@@ -1,13 +1,11 @@
+module tb_s_transform_re;
 
-module s_transform #(
-    parameter USE_S_RE = 1          // 1 -> use s_transform_rc module, 0 -> use naive method
-)(
-    input  logic [511:0] i_data,    // Input data block for substitution
-    output logic [511:0] o_data     // Output block with substituted bytes
-);
 
-// Subtsitution table
-const logic [7:0] sbox [0:255] = {
+logic [7:0] i_data;
+logic [7:0] o_data;
+logic [7:0] expected_o_data;
+
+logic [7:0] sbox [0:255] = {
     8'hFC, 8'hEE, 8'hDD, 8'h11, 8'hCF, 8'h6E, 8'h31, 8'h16, 8'hFB, 8'hC4, 8'hFA, 8'hDA, 8'h23, 8'hC5, 8'h04, 8'h4D,
     8'hE9, 8'h77, 8'hF0, 8'hDB, 8'h93, 8'h2E, 8'h99, 8'hBA, 8'h17, 8'h36, 8'hF1, 8'hBB, 8'h14, 8'hCD, 8'h5F, 8'hC1,
     8'hF9, 8'h18, 8'h65, 8'h5A, 8'hE2, 8'h5C, 8'hEF, 8'h21, 8'h81, 8'h1C, 8'h3C, 8'h42, 8'h8B, 8'h01, 8'h8E, 8'h4F,
@@ -26,34 +24,25 @@ const logic [7:0] sbox [0:255] = {
     8'h59, 8'hA6, 8'h74, 8'hD2, 8'hE6, 8'hF4, 8'hB4, 8'hC0, 8'hD1, 8'h66, 8'hAF, 8'hC2, 8'h39, 8'h4B, 8'h63, 8'hB6
 };
 
-// Distribute input/output into a byte array
-logic [7:0] input_bytes [0:63];
-logic [7:0] output_bytes [0:63];
+// Initialize DUT
+s_transform_re dut (
+    .i_data(i_data),
+    .o_data(o_data)
+);
 
-genvar i;
-generate
-    if (USE_S_RE) begin
-        for (i = 0; i < 64; i++) begin : byte_replace
-            // Extracting the i-th byte from the input
-            assign input_bytes[i] = i_data[8*i +: 8];
-            // Substitution via table
-            s_transform_re re_instance(
-                .i_data(input_bytes[i]),
-                .o_data(output_bytes[i])
-            );
-            // Form an output vector from the substituted bytes
-            assign o_data[8*i +: 8] = output_bytes[i];
-        end
-    end else begin
-        for (i = 0; i < 64; i++) begin : byte_replace
-            // Extracting the i-th byte from the input
-            assign input_bytes[i] = i_data[8*i +: 8];
-            // Substitution via table
-            assign output_bytes[i] = sbox[input_bytes[i]];
-            // Form an output vector from the substituted bytes
-            assign o_data[8*i +: 8] = output_bytes[i];
+initial begin
+    for (int i = 0; i < 256; i++) begin : test_loop
+        i_data = i;
+        expected_o_data = sbox[i_data];
+        #10;
+        assert (o_data == expected_o_data) else begin
+            $display("Input:  %h", i_data);
+            $error("ASSERTION FAILED: dut_output = %h, expected %h", o_data, expected_o_data);
+            $stop;
         end
     end
-endgenerate
+    $stop;
+end
 
-endmodule : s_transform
+
+endmodule : tb_s_transform_re
