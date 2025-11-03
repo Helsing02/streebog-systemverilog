@@ -1,9 +1,31 @@
+// -----------------------------------------------------------------------------
+// Matrix Multiplication
+// Performs 64×64 binary matrix multiplication in GF(2) arithmetic.
+//
+// Operation:
+//   o_data = i_data × L_MATRIX
+// where L_MATRIX is a fixed 64×64 transformation matrix used in the L stage.
+//
+// Implementation details:
+//  - Each bit of i_data selects one row of L_MATRIX.
+//  - Rows are XORed together when the corresponding bit in i_data is '1'.
+//  - Fully combinational; latency = 0 cycles.
+//
+// Interface:
+//  - i_data : 64-bit input vector
+//  - o_data : 64-bit output vector
+// -----------------------------------------------------------------------------
+
 module matrix_multiplication (
     input  logic [63:0] i_data,     // Input data for matrix multiplication
     output logic [63:0] o_data      // Output result of multiplication
 );
 
-// Matrix
+// -----------------------------------------------------------------------------
+// Transformation matrix definition
+// Each 64-bit constant represents one row of the 64×64 binary matrix.
+// The matrix provides linear diffusion in the L transformation.
+// -----------------------------------------------------------------------------
 const logic [63:0] L_MATRIX [63:0] = {
     64'h8e20faa72ba0b470, 64'h47107ddd9b505a38, 64'had08b0e0c3282d1c, 64'hd8045870ef14980e,
     64'h6c022c38f90a4c07, 64'h3601161cf205268d, 64'h1b8e0b0e798c13c8, 64'h83478b07b2468764,
@@ -23,13 +45,22 @@ const logic [63:0] L_MATRIX [63:0] = {
     64'h07e095624504536c, 64'h8d70c431ac02a736, 64'hc83862965601dd1b, 64'h641c314b2b8ee083
 };
 
+// -----------------------------------------------------------------------------
+// Combinational matrix multiplication logic
+// Initialize result to zero, then XOR selected rows of L_MATRIX
+// based on which bits in i_data are set to '1'.
+// -----------------------------------------------------------------------------
 integer i;
 always_comb begin
     o_data = 64'b0;                 // Initialze rezult
     for (i = 0; i < 64; i++) begin : matr_mult_loop
-        if (i_data[i])              // If current bit equals 1
-            o_data ^= L_MATRIX[i];  // Include matrix row into result
+        // Include current matrix row when corresponding input bit is set
+        if (i_data[i])
+            o_data ^= L_MATRIX[i];
     end
 end
 
+// -----------------------------------------------------------------------------
+// End of Matrix Multiplication
+// -----------------------------------------------------------------------------
 endmodule : matrix_multiplication

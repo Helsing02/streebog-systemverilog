@@ -1,3 +1,25 @@
+// -----------------------------------------------------------------------------
+// S Transform
+// Nonlinear substitution stage that applies byte-wise substitution (S-box)
+// to the 512-bit input data block.
+//
+// Operation:
+//   Each byte of i_data is replaced by sbox[i_data[i]] or by the output
+//   of s_transform_re (depending on USE_S_RE parameter).
+//
+// Interface:
+//  - i_data : 512-bit input block (64 bytes)
+//  - o_data : 512-bit output block with substituted bytes
+//
+// Parameter:
+//  - USE_S_RE : selects substitution method
+//      0 -> direct table lookup (naive mode)
+//      1 -> uses s_transform_re module (reverse engineering method)
+//
+// Notes:
+//  - Fully combinational logic, 64 independent byte substitutions.
+//  - Provides nonlinearity for cryptographic diffusion.
+// ----------------------------------
 
 module s_transform #(
     parameter USE_S_RE = 1          // 1 -> use s_transform_rc module, 0 -> use naive method
@@ -6,7 +28,11 @@ module s_transform #(
     output logic [511:0] o_data     // Output block with substituted bytes
 );
 
-// Subtsitution table
+// -----------------------------------------------------------------------------
+// Substitution table (S-box)
+// Maps 8-bit input values to 8-bit substituted outputs.
+// Defined according to the standard substitution matrix.
+// -----------------------------------------------------------------------------
 const logic [7:0] sbox [0:255] = {
     8'hFC, 8'hEE, 8'hDD, 8'h11, 8'hCF, 8'h6E, 8'h31, 8'h16, 8'hFB, 8'hC4, 8'hFA, 8'hDA, 8'h23, 8'hC5, 8'h04, 8'h4D,
     8'hE9, 8'h77, 8'hF0, 8'hDB, 8'h93, 8'h2E, 8'h99, 8'hBA, 8'h17, 8'h36, 8'hF1, 8'hBB, 8'h14, 8'hCD, 8'h5F, 8'hC1,
@@ -26,13 +52,25 @@ const logic [7:0] sbox [0:255] = {
     8'h59, 8'hA6, 8'h74, 8'hD2, 8'hE6, 8'hF4, 8'hB4, 8'hC0, 8'hD1, 8'h66, 8'hAF, 8'hC2, 8'h39, 8'h4B, 8'h63, 8'hB6
 };
 
-// Distribute input/output into a byte array
+// Byte-level decomposition of input and output data.
+// Each 512-bit block is treated as an array of 64 bytes.
 logic [7:0] input_bytes [0:63];
 logic [7:0] output_bytes [0:63];
 
+// -----------------------------------------------------------------------------
+// Generate substitution logic for each of the 64 bytes.
+//
+// Two operation modes:
+//  - USE_S_RE = 1 : use external s_transform_re module
+//  - USE_S_RE = 0 : perform direct lookup in the local S-box table
+// -----------------------------------------------------------------------------
 genvar i;
 generate
     if (USE_S_RE) begin
+        // ---------------------------------------------------------------------
+        // Substitution via s_transform_re instances
+        // Each byte is passed through an external substitution module.
+        // ---------------------------------------------------------------------
         for (i = 0; i < 64; i++) begin : byte_replace
             // Extracting the i-th byte from the input
             assign input_bytes[i] = i_data[8*i +: 8];
@@ -45,6 +83,10 @@ generate
             assign o_data[8*i +: 8] = output_bytes[i];
         end
     end else begin
+        // ---------------------------------------------------------------------
+        // Direct substitution via lookup table
+        // Each input byte is replaced by its S-box value locally.
+        // ---------------------------------------------------------------------
         for (i = 0; i < 64; i++) begin : byte_replace
             // Extracting the i-th byte from the input
             assign input_bytes[i] = i_data[8*i +: 8];
@@ -56,4 +98,7 @@ generate
     end
 endgenerate
 
+// -----------------------------------------------------------------------------
+// End of S Transform
+// -----------------------------------------------------------------------------
 endmodule : s_transform

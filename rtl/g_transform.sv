@@ -1,3 +1,14 @@
+// -----------------------------------------------------------------------------
+// G Transform (g_N(h, m))
+// Performs 13 internal rounds using LPSX transformations to update the hash
+// state. This block represents the core round function in the hash algorithm.
+//
+// Each round combines message data, round constants (C), and current hash state.
+// FSM controls round progression and output validity.
+//
+// NOTE: Constants C[0..11] are used for S1..S12 rounds; S13 uses zero default.
+// -----------------------------------------------------------------------------
+
 module g_transform # (
     parameter USE_S_RE = 1                  // 1 -> use s_transform_rc module, 0 -> use naive method
 )(
@@ -15,131 +26,30 @@ module g_transform # (
     output logic o_h_valid                  // Output signal about the validity of the calculation result
 );
 
-// 12 constants of the algorithm
+// ================================= Constants =================================
+// Round constants table (used for 12 rounds).
+// Each 512-bit entry corresponds to one iteration's constant.
+// Indexing: C[0] for S1, C[11] for S12.
 const logic [511:0] C[0:11] = {
-    {
-        8'hb1, 8'h08, 8'h5b, 8'hda, 8'h1e, 8'hca, 8'hda, 8'he9,
-        8'heb, 8'hcb, 8'h2f, 8'h81, 8'hc0, 8'h65, 8'h7c, 8'h1f,
-        8'h2f, 8'h6a, 8'h76, 8'h43, 8'h2e, 8'h45, 8'hd0, 8'h16,
-        8'h71, 8'h4e, 8'hb8, 8'h8d, 8'h75, 8'h85, 8'hc4, 8'hfc,
-        8'h4b, 8'h7c, 8'he0, 8'h91, 8'h92, 8'h67, 8'h69, 8'h01,
-        8'ha2, 8'h42, 8'h2a, 8'h08, 8'ha4, 8'h60, 8'hd3, 8'h15,
-        8'h05, 8'h76, 8'h74, 8'h36, 8'hcc, 8'h74, 8'h4d, 8'h23,
-        8'hdd, 8'h80, 8'h65, 8'h59, 8'hf2, 8'ha6, 8'h45, 8'h07
-    },
-    {
-        8'h6f, 8'ha3, 8'hb5, 8'h8a, 8'ha9, 8'h9d, 8'h2f, 8'h1a,
-        8'h4f, 8'he3, 8'h9d, 8'h46, 8'h0f, 8'h70, 8'hb5, 8'hd7,
-        8'hf3, 8'hfe, 8'hea, 8'h72, 8'h0a, 8'h23, 8'h2b, 8'h98,
-        8'h61, 8'hd5, 8'h5e, 8'h0f, 8'h16, 8'hb5, 8'h01, 8'h31,
-        8'h9a, 8'hb5, 8'h17, 8'h6b, 8'h12, 8'hd6, 8'h99, 8'h58,
-        8'h5c, 8'hb5, 8'h61, 8'hc2, 8'hdb, 8'h0a, 8'ha7, 8'hca,
-        8'h55, 8'hdd, 8'ha2, 8'h1b, 8'hd7, 8'hcb, 8'hcd, 8'h56,
-        8'he6, 8'h79, 8'h04, 8'h70, 8'h21, 8'hb1, 8'h9b, 8'hb7
-    },
-    {
-        8'hf5, 8'h74, 8'hdc, 8'hac, 8'h2b, 8'hce, 8'h2f, 8'hc7,
-        8'h0a, 8'h39, 8'hfc, 8'h28, 8'h6a, 8'h3d, 8'h84, 8'h35,
-        8'h06, 8'hf1, 8'h5e, 8'h5f, 8'h52, 8'h9c, 8'h1f, 8'h8b,
-        8'hf2, 8'hea, 8'h75, 8'h14, 8'hb1, 8'h29, 8'h7b, 8'h7b,
-        8'hd3, 8'he2, 8'h0f, 8'he4, 8'h90, 8'h35, 8'h9e, 8'hb1,
-        8'hc1, 8'hc9, 8'h3a, 8'h37, 8'h60, 8'h62, 8'hdb, 8'h09,
-        8'hc2, 8'hb6, 8'hf4, 8'h43, 8'h86, 8'h7a, 8'hdb, 8'h31,
-        8'h99, 8'h1e, 8'h96, 8'hf5, 8'h0a, 8'hba, 8'h0a, 8'hb2
-    },
-    {
-        8'hef, 8'h1f, 8'hdf, 8'hb3, 8'he8, 8'h15, 8'h66, 8'hd2,
-        8'hf9, 8'h48, 8'he1, 8'ha0, 8'h5d, 8'h71, 8'he4, 8'hdd,
-        8'h48, 8'h8e, 8'h85, 8'h7e, 8'h33, 8'h5c, 8'h3c, 8'h7d,
-        8'h9d, 8'h72, 8'h1c, 8'had, 8'h68, 8'h5e, 8'h35, 8'h3f,
-        8'ha9, 8'hd7, 8'h2c, 8'h82, 8'hed, 8'h03, 8'hd6, 8'h75,
-        8'hd8, 8'hb7, 8'h13, 8'h33, 8'h93, 8'h52, 8'h03, 8'hbe,
-        8'h34, 8'h53, 8'hea, 8'ha1, 8'h93, 8'he8, 8'h37, 8'hf1,
-        8'h22, 8'h0c, 8'hbe, 8'hbc, 8'h84, 8'he3, 8'hd1, 8'h2e
-    },
-    {
-        8'h4b, 8'hea, 8'h6b, 8'hac, 8'had, 8'h47, 8'h47, 8'h99,
-        8'h9a, 8'h3f, 8'h41, 8'h0c, 8'h6c, 8'ha9, 8'h23, 8'h63,
-        8'h7f, 8'h15, 8'h1c, 8'h1f, 8'h16, 8'h86, 8'h10, 8'h4a,
-        8'h35, 8'h9e, 8'h35, 8'hd7, 8'h80, 8'h0f, 8'hff, 8'hbd,
-        8'hbf, 8'hcd, 8'h17, 8'h47, 8'h25, 8'h3a, 8'hf5, 8'ha3,
-        8'hdf, 8'hff, 8'h00, 8'hb7, 8'h23, 8'h27, 8'h1a, 8'h16,
-        8'h7a, 8'h56, 8'ha2, 8'h7e, 8'ha9, 8'hea, 8'h63, 8'hf5,
-        8'h60, 8'h17, 8'h58, 8'hfd, 8'h7c, 8'h6c, 8'hfe, 8'h57
-    },
-    {
-        8'hae, 8'h4f, 8'hae, 8'hae, 8'h1d, 8'h3a, 8'hd3, 8'hd9,
-        8'h6f, 8'ha4, 8'hc3, 8'h3b, 8'h7a, 8'h30, 8'h39, 8'hc0,
-        8'h2d, 8'h66, 8'hc4, 8'hf9, 8'h51, 8'h42, 8'ha4, 8'h6c,
-        8'h18, 8'h7f, 8'h9a, 8'hb4, 8'h9a, 8'hf0, 8'h8e, 8'hc6,
-        8'hcf, 8'hfa, 8'ha6, 8'hb7, 8'h1c, 8'h9a, 8'hb7, 8'hb4,
-        8'h0a, 8'hf2, 8'h1f, 8'h66, 8'hc2, 8'hbe, 8'hc6, 8'hb6,
-        8'hbf, 8'h71, 8'hc5, 8'h72, 8'h36, 8'h90, 8'h4f, 8'h35,
-        8'hfa, 8'h68, 8'h40, 8'h7a, 8'h46, 8'h64, 8'h7d, 8'h6e
-    },
-    {
-        8'hf4, 8'hc7, 8'h0e, 8'h16, 8'hee, 8'haa, 8'hc5, 8'hec,
-        8'h51, 8'hac, 8'h86, 8'hfe, 8'hbf, 8'h24, 8'h09, 8'h54,
-        8'h39, 8'h9e, 8'hc6, 8'hc7, 8'he6, 8'hbf, 8'h87, 8'hc9,
-        8'hd3, 8'h47, 8'h3e, 8'h33, 8'h19, 8'h7a, 8'h93, 8'hc9,
-        8'h09, 8'h92, 8'hab, 8'hc5, 8'h2d, 8'h82, 8'h2c, 8'h37,
-        8'h06, 8'h47, 8'h69, 8'h83, 8'h28, 8'h4a, 8'h05, 8'h04,
-        8'h35, 8'h17, 8'h45, 8'h4c, 8'ha2, 8'h3c, 8'h4a, 8'hf3,
-        8'h88, 8'h86, 8'h56, 8'h4d, 8'h3a, 8'h14, 8'hd4, 8'h93
-    },
-    {
-        8'h9b, 8'h1f, 8'h5b, 8'h42, 8'h4d, 8'h93, 8'hc9, 8'ha7,
-        8'h03, 8'he7, 8'haa, 8'h02, 8'h0c, 8'h6e, 8'h41, 8'h41,
-        8'h4e, 8'hb7, 8'hf8, 8'h71, 8'h9c, 8'h36, 8'hde, 8'h1e,
-        8'h89, 8'hb4, 8'h44, 8'h3b, 8'h4d, 8'hdb, 8'hc4, 8'h9a,
-        8'hf4, 8'h89, 8'h2b, 8'hcb, 8'h92, 8'h9b, 8'h06, 8'h90,
-        8'h69, 8'hd1, 8'h8d, 8'h2b, 8'hd1, 8'ha5, 8'hc4, 8'h2f,
-        8'h36, 8'hac, 8'hc2, 8'h35, 8'h59, 8'h51, 8'ha8, 8'hd9,
-        8'ha4, 8'h7f, 8'h0d, 8'hd4, 8'hbf, 8'h02, 8'he7, 8'h1e
-    },
-    {
-        8'h37, 8'h8f, 8'h5a, 8'h54, 8'h16, 8'h31, 8'h22, 8'h9b,
-        8'h94, 8'h4c, 8'h9a, 8'hd8, 8'hec, 8'h16, 8'h5f, 8'hde,
-        8'h3a, 8'h7d, 8'h3a, 8'h1b, 8'h25, 8'h89, 8'h42, 8'h24,
-        8'h3c, 8'hd9, 8'h55, 8'hb7, 8'he0, 8'h0d, 8'h09, 8'h84,
-        8'h80, 8'h0a, 8'h44, 8'h0b, 8'hdb, 8'hb2, 8'hce, 8'hb1,
-        8'h7b, 8'h2b, 8'h8a, 8'h9a, 8'ha6, 8'h07, 8'h9c, 8'h54,
-        8'h0e, 8'h38, 8'hdc, 8'h92, 8'hcb, 8'h1f, 8'h2a, 8'h60,
-        8'h72, 8'h61, 8'h44, 8'h51, 8'h83, 8'h23, 8'h5a, 8'hdb
-    },
-    {
-        8'hab, 8'hbe, 8'hde, 8'ha6, 8'h80, 8'h05, 8'h6f, 8'h52,
-        8'h38, 8'h2a, 8'he5, 8'h48, 8'hb2, 8'he4, 8'hf3, 8'hf3,
-        8'h89, 8'h41, 8'he7, 8'h1c, 8'hff, 8'h8a, 8'h78, 8'hdb,
-        8'h1f, 8'hff, 8'he1, 8'h8a, 8'h1b, 8'h33, 8'h61, 8'h03,
-        8'h9f, 8'he7, 8'h67, 8'h02, 8'haf, 8'h69, 8'h33, 8'h4b,
-        8'h7a, 8'h1e, 8'h6c, 8'h30, 8'h3b, 8'h76, 8'h52, 8'hf4,
-        8'h36, 8'h98, 8'hfa, 8'hd1, 8'h15, 8'h3b, 8'hb6, 8'hc3,
-        8'h74, 8'hb4, 8'hc7, 8'hfb, 8'h98, 8'h45, 8'h9c, 8'hed
-    },
-    {
-        8'h7b, 8'hcd, 8'h9e, 8'hd0, 8'hef, 8'hc8, 8'h89, 8'hfb,
-        8'h30, 8'h02, 8'hc6, 8'hcd, 8'h63, 8'h5a, 8'hfe, 8'h94,
-        8'hd8, 8'hfa, 8'h6b, 8'hbb, 8'heb, 8'hab, 8'h07, 8'h61,
-        8'h20, 8'h01, 8'h80, 8'h21, 8'h14, 8'h84, 8'h66, 8'h79,
-        8'h8a, 8'h1d, 8'h71, 8'hef, 8'hea, 8'h48, 8'hb9, 8'hca,
-        8'hef, 8'hba, 8'hcd, 8'h1d, 8'h7d, 8'h47, 8'h6e, 8'h98,
-        8'hde, 8'ha2, 8'h59, 8'h4a, 8'hc0, 8'h6f, 8'hd8, 8'h5d,
-        8'h6b, 8'hca, 8'ha4, 8'hcd, 8'h81, 8'hf3, 8'h2d, 8'h1b
-    },
-    {
-        8'h37, 8'h8e, 8'he7, 8'h67, 8'hf1, 8'h16, 8'h31, 8'hba,
-        8'hd2, 8'h13, 8'h80, 8'hb0, 8'h04, 8'h49, 8'hb1, 8'h7a,
-        8'hcd, 8'ha4, 8'h3c, 8'h32, 8'hbc, 8'hdf, 8'h1d, 8'h77,
-        8'hf8, 8'h20, 8'h12, 8'hd4, 8'h30, 8'h21, 8'h9f, 8'h9b,
-        8'h5d, 8'h80, 8'hef, 8'h9d, 8'h18, 8'h91, 8'hcc, 8'h86,
-        8'he7, 8'h1d, 8'ha4, 8'haa, 8'h88, 8'he1, 8'h28, 8'h52,
-        8'hfa, 8'hf4, 8'h17, 8'hd5, 8'hd9, 8'hb2, 8'h1b, 8'h99,
-        8'h48, 8'hbc, 8'h92, 8'h4a, 8'hf1, 8'h1b, 8'hd7, 8'h20
-    }
+    512'hb1085bda1ecadae9ebcb2f81c0657c1f2f6a76432e45d016714eb88d7585c4fc4b7ce09192676901a2422a08a460d31505767436cc744d23dd806559f2a64507,
+    512'h6fa3b58aa99d2f1a4fe39d460f70b5d7f3feea720a232b9861d55e0f16b501319ab5176b12d699585cb561c2db0aa7ca55dda21bd7cbcd56e679047021b19bb7,
+    512'hf574dcac2bce2fc70a39fc286a3d843506f15e5f529c1f8bf2ea7514b1297b7bd3e20fe490359eb1c1c93a376062db09c2b6f443867adb31991e96f50aba0ab2,
+    512'hef1fdfb3e81566d2f948e1a05d71e4dd488e857e335c3c7d9d721cad685e353fa9d72c82ed03d675d8b71333935203be3453eaa193e837f1220cbebc84e3d12e,
+    512'h4bea6bacad4747999a3f410c6ca923637f151c1f1686104a359e35d7800fffbdbfcd1747253af5a3dfff00b723271a167a56a27ea9ea63f5601758fd7c6cfe57,
+    512'hae4faeae1d3ad3d96fa4c33b7a3039c02d66c4f95142a46c187f9ab49af08ec6cffaa6b71c9ab7b40af21f66c2bec6b6bf71c57236904f35fa68407a46647d6e,
+    512'hf4c70e16eeaac5ec51ac86febf240954399ec6c7e6bf87c9d3473e33197a93c90992abc52d822c3706476983284a05043517454ca23c4af38886564d3a14d493,
+    512'h9b1f5b424d93c9a703e7aa020c6e41414eb7f8719c36de1e89b4443b4ddbc49af4892bcb929b069069d18d2bd1a5c42f36acc2355951a8d9a47f0dd4bf02e71e,
+    512'h378f5a541631229b944c9ad8ec165fde3a7d3a1b258942243cd955b7e00d0984800a440bdbb2ceb17b2b8a9aa6079c540e38dc92cb1f2a607261445183235adb,
+    512'habbedea680056f52382ae548b2e4f3f38941e71cff8a78db1fffe18a1b3361039fe76702af69334b7a1e6c303b7652f43698fad1153bb6c374b4c7fb98459ced,
+    512'h7bcd9ed0efc889fb3002c6cd635afe94d8fa6bbbebab076120018021148466798a1d71efea48b9caefbacd1d7d476e98dea2594ac06fd85d6bcaa4cd81f32d1b,
+    512'h378ee767f11631bad21380b00449b17acda43c32bcdf1d77f82012d430219f9b5d80ef9d1891cc86e71da4aa88e12852faf417d5d9b21b9948bc924af11bd720
 };
 
-// ======= G transform calculation FSM =======
+// ======================== G transform calculation FSM ========================
+// FSM state encoding:
+//  - IDLE: Wait for valid message input.
+//  - S1..S13: Execute 13 internal rounds (one per clock).
+//  - READY: Output valid hash value, then return to IDLE.
 typedef enum logic [3:0] {
     IDLE, S1,  S2,  S3,
     S4,   S5,  S6,  S7,
@@ -149,6 +59,10 @@ typedef enum logic [3:0] {
 
 statetype state, nextstate;
 
+// Main FSM: controls round progression
+// - Transitions from IDLE -> S1 when new message valid
+// - Increments state each cycle until S13
+// - Asserts output at READY and returns to IDLE
 always_ff @(posedge clk) begin : proc_state
     if(~rst_n) begin
         state <= IDLE;
@@ -157,7 +71,8 @@ always_ff @(posedge clk) begin : proc_state
     end
 end
 
-// Next state logic
+// FSM next-state logic
+// Determines next state based on current state and handshaking signals.
 always_comb begin
     case (state)
         IDLE:    nextstate = (s_axis_m_tvalid == 1) ? S1 : IDLE;
@@ -188,7 +103,8 @@ logic [511:0] i_data_b_key;
 logic [511:0] o_data_key;
 logic [511:0] o_data_m;
 
-
+// Store current key value
+// Obtained from output of LSPX for key
 always_ff @(posedge clk) begin : proc_key_reg
     if(~rst_n) begin
         key_reg <= '0;
@@ -197,26 +113,32 @@ always_ff @(posedge clk) begin : proc_key_reg
     end
 end
 
+// Capture input message block when entering S1
+// (Message block is XORed with hash in the first LPSX stage)
 always_ff @(posedge clk) begin : proc_m_reg
     if(~rst_n) begin
         m_reg <= '0;
     end else begin
-        m_reg <= (nextstate == S1) ? s_axis_m_tdata : o_data_m;
+        m_reg <= (state == IDLE) ? s_axis_m_tdata : o_data_m;
     end
 end
 
+// Store XOR of current hash (h) and message block.
+// Used to store this value until S13 state
 always_ff @(posedge clk) begin : proc_m_xor_h_reg
     if(~rst_n) begin
         m_xor_h_reg <= '0;
-    end else if (nextstate == S1) begin
+    end else if (state == IDLE) begin
         m_xor_h_reg <= s_axis_m_tdata ^ i_h_data;
     end
 end
 
+// Latch final output hash value when FSM enters READY.
+// o_h_valid asserted only during READY.
 always_ff @(posedge clk) begin : proc_o_h_data
     if(~rst_n) begin
         o_h_data <= '0;
-    end else if (nextstate == READY) begin
+    end else if (state == S13) begin
         o_h_data <= key_reg ^ m_reg ^ m_xor_h_reg;
     end
 end
@@ -239,9 +161,32 @@ lpsx_transform # (
 );
 
 assign i_data_a_key = (state == IDLE) ? i_h_data : key_reg;
-assign i_data_b_key = (state == IDLE) ? i_N_data : C[state - 1];
 
+// Select B input (key schedule):
+// - Use N_data during IDLE
+// - Use round constant C[state-1] for S1..S12
+// NOTICE: Protected against out-of-range index (S13/READY)
+logic [511:0] C_sel;
+always_comb begin
+    if (state == IDLE) begin
+        C_sel = i_N_data;
+    end else if ((state >= S1) && (state <= S12)) begin
+        C_sel = C[state - 1];
+    end else begin
+        C_sel = 512'h0; // or appropriate value for S13/READY
+    end
+end
+assign i_data_b_key = C_sel;
+
+// Handshake and output assignments:
+// - s_axis_m_tready is high only in IDLE
+// - o_h_valid asserted in READY
+// - Output data latched from internal o_h_data register
 assign o_h_valid = (state == READY);
 assign s_axis_m_tready = (state == IDLE);
 
+
+// -----------------------------------------------------------------------------
+// End of g_transform
+// -----------------------------------------------------------------------------
 endmodule : g_transform
