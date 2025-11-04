@@ -1,11 +1,38 @@
+`timescale 1ns / 1ps
+`default_nettype none
+
+// -----------------------------------------------------------------------------
+// Testbench for s_transform_re
+// Verifies reverse-engineered S-box implementation by exhaustively testing
+// all 256 possible input byte values and comparing to the reference S-box.
+//
+// Style and output format are consistent with tb_p_transform / tb_s_transform.
+// -----------------------------------------------------------------------------
 module tb_s_transform_re;
 
+// -----------------------------------------------------------------------------
+// DUT I/O
+// -----------------------------------------------------------------------------
+logic [7:0] i_byte;
+logic [7:0] o_byte;
+logic [7:0] expected;
 
-logic [7:0] i_data;
-logic [7:0] o_data;
-logic [7:0] expected_o_data;
+// Statistics
+int total_tests = 0;
+int errors = 0;
 
-logic [7:0] sbox [0:255] = {
+// -----------------------------------------------------------------------------
+// DUT instantiation
+// -----------------------------------------------------------------------------
+s_transform_re dut (
+    .i_data(i_byte),
+    .o_data(o_byte)
+);
+
+// -----------------------------------------------------------------------------
+// Reference S-box
+// -----------------------------------------------------------------------------
+const logic [7:0] SBOX_REF [0:255] = '{
     8'hFC, 8'hEE, 8'hDD, 8'h11, 8'hCF, 8'h6E, 8'h31, 8'h16, 8'hFB, 8'hC4, 8'hFA, 8'hDA, 8'h23, 8'hC5, 8'h04, 8'h4D,
     8'hE9, 8'h77, 8'hF0, 8'hDB, 8'h93, 8'h2E, 8'h99, 8'hBA, 8'h17, 8'h36, 8'hF1, 8'hBB, 8'h14, 8'hCD, 8'h5F, 8'hC1,
     8'hF9, 8'h18, 8'h65, 8'h5A, 8'hE2, 8'h5C, 8'hEF, 8'h21, 8'h81, 8'h1C, 8'h3C, 8'h42, 8'h8B, 8'h01, 8'h8E, 8'h4F,
@@ -24,25 +51,92 @@ logic [7:0] sbox [0:255] = {
     8'h59, 8'hA6, 8'h74, 8'hD2, 8'hE6, 8'hF4, 8'hB4, 8'hC0, 8'hD1, 8'h66, 8'hAF, 8'hC2, 8'h39, 8'h4B, 8'h63, 8'hB6
 };
 
-// Initialize DUT
-s_transform_re dut (
-    .i_data(i_data),
-    .o_data(o_data)
-);
+// -----------------------------------------------------------------------------
+// Reference function
+// -----------------------------------------------------------------------------
+function automatic [7:0] ref_s_transform_re(input [7:0] b);
+    ref_s_transform_re = SBOX_REF[b];
+endfunction : ref_s_transform_re
 
-initial begin
-    for (int i = 0; i < 256; i++) begin : test_loop
-        i_data = i;
-        expected_o_data = sbox[i_data];
-        #10;
-        assert (o_data == expected_o_data) else begin
-            $display("Input:  %h", i_data);
-            $error("ASSERTION FAILED: dut_output = %h, expected %h", o_data, expected_o_data);
-            $stop;
-        end
+// -----------------------------------------------------------------------------
+// Common check task
+// (compute expected, wait for combinational outputs, compare, log)
+// -----------------------------------------------------------------------------
+task automatic check_single(string name);
+    expected = ref_s_transform_re(i_byte);
+    #10; // allow combinational outputs to settle
+    total_tests++;
+
+    if (o_byte !== expected) begin
+        errors++;
+        $display("[FAIL] %s : input=0x%02h expected=0x%02h got=0x%02h",
+                 name, i_byte, expected, o_byte);
+    end else begin
+        $display("[PASS] %s : input=0x%02h => 0x%02h", name, i_byte, o_byte);
     end
-    $stop;
+endtask : check_single
+
+// -----------------------------------------------------------------------------
+// Exhaustive test: iterate all 256 input values
+// -----------------------------------------------------------------------------
+task automatic test_exhaustive();
+    for (int v = 0; v < 256; v++) begin
+        i_byte = v[7:0];
+        check_single($sformatf("Exhaustive %0d", v));
+    end
+endtask : test_exhaustive
+
+// -----------------------------------------------------------------------------
+// Focused tests for branch coverage (explicitly hit r==0 path, etc.)
+// (redundant with exhaustive but useful as readable, specific checks)
+// -----------------------------------------------------------------------------
+task automatic test_edge_cases();
+    // a few selected bytes that stress GF multiplication
+    logic [7:0] vecs [0:7] = '{8'h01, 8'h02, 8'h0f, 8'h5a, 8'ha5, 8'h7f, 8'hc3, 8'hff};
+
+    // lower nibble zero: 0x00, 0x10, ..., 0xF0
+    for (int k = 0; k < 16; k++) begin
+        i_byte = (k << 4);
+        check_single($sformatf("Edge r==0 0x%02h", i_byte));
+    end
+
+    for (int j = 0; j < 8; j++) begin
+        i_byte = vecs[j];
+        check_single($sformatf("Stress 0x%02h", i_byte));
+    end
+endtask : test_edge_cases
+
+// -----------------------------------------------------------------------------
+// Test sequence
+// -----------------------------------------------------------------------------
+initial begin
+    $display("\n=== s_transform_re Testbench ===");
+
+    // exhaustive gives full coverage; run edge-cases as readable checks
+    test_exhaustive();    // primary — exhaustive 0..255
+    test_edge_cases();    // secondary — specific human-readable checks
+
+    $display("\n----------------------------------");
+    $display(" Summary:");
+    $display("   Total tests : %0d", total_tests);
+    $display("   Errors       : %0d", errors);
+    if (errors == 0)
+        $display("   RESULT       : ALL TESTS PASSED");
+    else
+        $display("   RESULT       : SOME TESTS FAILED");
+
+    $display("----------------------------------\n");
+    $finish;
 end
 
+// -----------------------------------------------------------------------------
+// Optional X/Z sanity check on DUT output
+// -----------------------------------------------------------------------------
+always @(o_byte) begin
+    if (^o_byte === 1'bx)
+        $warning("Output contains X/Z at time %0t", $time);
+end
 
 endmodule : tb_s_transform_re
+
+`default_nettype wire

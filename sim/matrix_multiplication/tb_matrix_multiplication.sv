@@ -1,16 +1,47 @@
-`resetall
 `timescale 1ns / 1ps
+`default_nettype none
 
-module tb_matrix_multiplication # (
-    parameter ROUNDS = 100
-);
+// -----------------------------------------------------------------------------
+// Testbench for matrix_multiplication
+// Verifies correctness of 64×64 binary matrix multiplication in GF(2).
+//
+// Test strategy:
+//   1. Zero input       → Expect zero output
+//   2. Single-bit tests → Each bit selects one matrix row
+//   3. Random vectors   → Cross-verifies full XOR accumulation logic
+//
+// Notes:
+//   - Uses combinational DUT, zero-latency verification.
+//   - Reference model: direct row-XOR accumulation (software equivalent).
+// -----------------------------------------------------------------------------
+module tb_matrix_multiplication;
 
+localparam int ROUNDS = 100;
+
+// -----------------------------------------------------------------------------
+// DUT I/O
+// -----------------------------------------------------------------------------
 logic [63:0] i_data;
 logic [63:0] o_data;
-logic [63:0] expected_o_data;
+logic [63:0] expected;
 
-// Matrix
-const logic [63:0] L_MATRIX [63:0] = {
+// Statistics
+int total_tests = 0;
+int errors = 0;
+
+// -----------------------------------------------------------------------------
+// DUT Instance
+// -----------------------------------------------------------------------------
+matrix_multiplication dut (
+    .i_data(i_data),
+    .o_data(o_data)
+);
+
+// -----------------------------------------------------------------------------
+// Reference Matrix (duplicated from DUT for test clarity)
+// Each row defines 64-bit output contribution for a single input bit.
+// -----------------------------------------------------------------------------
+const logic [63:0] L_MATRIX [63:0] = '{
     64'h8e20faa72ba0b470, 64'h47107ddd9b505a38, 64'had08b0e0c3282d1c, 64'hd8045870ef14980e,
     64'h6c022c38f90a4c07, 64'h3601161cf205268d, 64'h1b8e0b0e798c13c8, 64'h83478b07b2468764,
     64'ha011d380818e8f40, 64'h5086e740ce47c920, 64'h2843fd2067adea10, 64'h14aff010bdd87508,
@@ -29,67 +60,113 @@ const logic [63:0] L_MATRIX [63:0] = {
     64'h07e095624504536c, 64'h8d70c431ac02a736, 64'hc83862965601dd1b, 64'h641c314b2b8ee083
 };
 
-// Function to xor matrix rows
-function logic [63:0] matr_mult(input logic [63:0] input_val);
-    int i;
-    logic [63:0] result;
-    begin
-        result = 64'b0;
-        for (i = 0; i < 64; i++) begin
-            if (input_val[i])
-                result ^= L_MATRIX[i];
-        end
-        return result;
-    end
+// -----------------------------------------------------------------------------
+// Reference Model
+// Direct GF(2) matrix multiplication implemented as XOR over selected rows.
+// -----------------------------------------------------------------------------
+function automatic logic [63:0] ref_matrix_mult(input logic [63:0] val);
+    logic [63:0] res;
+    res = 64'b0;
+    for (int i = 0; i < 64; i++)
+        if (val[i])
+            res ^= L_MATRIX[i];
+    return res;
 endfunction
 
-// Initialize DUT
-matrix_multiplication dut (
-    .i_data(i_data),
-    .o_data(o_data)
-);
+// -----------------------------------------------------------------------------
+// Common Check Task
+// -----------------------------------------------------------------------------
+task automatic check_result(string name);
+    #1;
+    total_tests++;
+    expected = ref_matrix_mult(i_data);
+    if (o_data !== expected) begin
+        errors++;
+        $display("[FAIL] %s", name);
+        $display("  Input:    %h", i_data);
+        $display("  Expected: %h", expected);
+        $display("  Got:      %h", o_data);
+    end else begin
+        $display("[PASS] %s", name);
+    end
+endtask
 
-initial begin
-    int i;
-    // Test zeros
+// -----------------------------------------------------------------------------
+// Test: All-Zero Input
+// Ensures that matrix multiplication with zero vector produces zero result.
+// -----------------------------------------------------------------------------
+task automatic test_zero_input();
     i_data = 64'b0;
-    expected_o_data = 64'b0;
-    #10;
+    check_result("All-zero input");
+endtask
 
-    assert (o_data == expected_o_data) else begin
-        $display("Input:  %h", i_data);
-        $error("ASSERTION FAILED: dut_output = %h, expected %h", o_data, expected_o_data);
-        $stop;
-    end
-
-    // Test each value in matrix one by one
-    for (i = 0; i < 64; i++) begin : one_bit_loop
-        i_data = (64'b1) << i;
-        expected_o_data = L_MATRIX[i];
-        #10;
-
-        assert (o_data == expected_o_data) else begin
-            $display("Input:  %h", i_data);
-            $error("ASSERTION FAILED: dut_output = %h, expected %h", o_data, expected_o_data);
-            $stop;
+// -----------------------------------------------------------------------------
+// Test: Single-Bit Inputs
+// Verifies that each input bit selects its corresponding matrix row exactly.
+// -----------------------------------------------------------------------------
+task automatic test_single_bit_inputs();
+    for (int i = 0; i < 64; i++) begin
+        i_data = 64'b1 << i;
+        expected = L_MATRIX[i];
+        #1;
+        total_tests++;
+        if (o_data !== expected) begin
+            errors++;
+            $display("[FAIL] Single bit #%0d", i);
+            $display("  Expected: %h", expected);
+            $display("  Got:      %h", o_data);
+        end else begin
+            $display("[PASS] Single bit #%0d", i);
         end
     end
+endtask
 
-    // Test random vectors
-    for (i = 0; i < ROUNDS; i++) begin : random_vectors_loop
+// -----------------------------------------------------------------------------
+// Test: Repeated Byte Patterns
+// Ensures that uniform and low-entropy inputs produce deterministic outputs.
+// -----------------------------------------------------------------------------
+task automatic test_byte_patterns();
+    for (int val = 0; val < 8; val++) begin
+        logic [7:0] byte_val = (val * 8) & 8'hFF;
+        i_data = {8{byte_val}}; // replicate byte pattern
+        check_result($sformatf("Byte-repeat pattern val=0x%02h", byte_val));
+    end
+endtask : test_byte_patterns
+
+// -----------------------------------------------------------------------------
+// Test: Random Vectors
+// Verifies correctness under multiple random combinations of input bits.
+// -----------------------------------------------------------------------------
+task automatic test_random_vectors(int num);
+    for (int n = 0; n < num; n++) begin
         i_data = {$urandom, $urandom};
-        expected_o_data = matr_mult(i_data);
-        #10;
-
-        assert (o_data == expected_o_data) else begin
-            $display("Input:  %h", i_data);
-            $error("ASSERTION FAILED: dut_output = %h, expected %h", o_data, expected_o_data);
-            $stop;
-        end
+        check_result($sformatf("Random vector #%0d", n));
     end
+endtask
 
+// -----------------------------------------------------------------------------
+// Main Test Sequence
+// -----------------------------------------------------------------------------
+initial begin
+    $display("\n=== Matrix Multiplication Testbench ===");
 
-    $stop;
+    test_zero_input();
+    test_single_bit_inputs();
+    test_byte_patterns();
+    test_random_vectors(ROUNDS);
+
+    $display("\n----------------------------------");
+    $display(" Summary:");
+    $display("   Total tests : %0d", total_tests);
+    $display("   Errors       : %0d", errors);
+    if (errors == 0)
+        $display("   RESULT       : ALL TESTS PASSED");
+    else
+        $display("   RESULT       : SOME TESTS FAILED");
+    $display("----------------------------------\n");
+
+    $finish;
 end
 
 endmodule : tb_matrix_multiplication
+`default_nettype wire
