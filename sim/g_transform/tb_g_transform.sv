@@ -82,31 +82,51 @@ initial begin
     rst_n = 0;
     #10;
     rst_n = 1;
+
+    i_h_data = '0;
+    i_N_data = '0;
+    s_axis_m_tdata = 512'h01323130393837363534333231303938373635343332313039383736353433323130393837363534333231303938373635343332313039383736353433323130;
+    s_axis_m_tvalid = 1'b1;
+
+    expected_o_h_data = call_g_transform(i_N_data, i_h_data, s_axis_m_tdata);
+
+    while (~s_axis_m_tready) #1;
+    #3;
+    s_axis_m_tvalid = 1'b0;
+
+    while (o_h_valid != 1) #10;
+
+    assert (o_h_data == expected_o_h_data) else begin
+        $error("ASSERTION FAILED:\n dut_output = %h\n expected = %h", o_h_data, expected_o_h_data);
+        $stop;
+    end
+
+
     // Test random vectors
     for (int i = 0; i < ROUNDS; i++) begin : random_vectors_loop
         while (~s_axis_m_tready) #10;
 
-        // i_h_data = {
-        //     $urandom, $urandom, $urandom, $urandom,
-        //     $urandom, $urandom, $urandom, $urandom,
-        //     $urandom, $urandom, $urandom, $urandom,
-        //     $urandom, $urandom, $urandom, $urandom
-        // };
-        // i_N_data = {
-        //     $urandom, $urandom, $urandom, $urandom,
-        //     $urandom, $urandom, $urandom, $urandom,
-        //     $urandom, $urandom, $urandom, $urandom,
-        //     $urandom, $urandom, $urandom, $urandom
-        // };
-        // s_axis_m_tdata = {
-        //     $urandom, $urandom, $urandom, $urandom,
-        //     $urandom, $urandom, $urandom, $urandom,
-        //     $urandom, $urandom, $urandom, $urandom,
-        //     $urandom, $urandom, $urandom, $urandom
-        // };
-        i_h_data = '0;
-        i_N_data = '0;
-        s_axis_m_tdata = 512'h01323130393837363534333231303938373635343332313039383736353433323130393837363534333231303938373635343332313039383736353433323130;
+        i_h_data = {
+            $urandom, $urandom, $urandom, $urandom,
+            $urandom, $urandom, $urandom, $urandom,
+            $urandom, $urandom, $urandom, $urandom,
+            $urandom, $urandom, $urandom, $urandom
+        };
+        i_N_data = {
+            $urandom, $urandom, $urandom, $urandom,
+            $urandom, $urandom, $urandom, $urandom,
+            $urandom, $urandom, $urandom, $urandom,
+            $urandom, $urandom, $urandom, $urandom
+        };
+        s_axis_m_tdata = {
+            $urandom, $urandom, $urandom, $urandom,
+            $urandom, $urandom, $urandom, $urandom,
+            $urandom, $urandom, $urandom, $urandom,
+            $urandom, $urandom, $urandom, $urandom
+        };
+        // i_h_data = '0;
+        // i_N_data = '0;
+        // s_axis_m_tdata = 512'h01323130393837363534333231303938373635343332313039383736353433323130393837363534333231303938373635343332313039383736353433323130;
 
         expected_o_h_data = call_g_transform(i_N_data, i_h_data, s_axis_m_tdata);
 

@@ -14,7 +14,8 @@
 // -----------------------------------------------------------------------------
 
 module hash # (
-    parameter USE_S_RE = 0              // 1 -> use s_transform_rc module, 0 -> use naive method
+    parameter USE_S_RE = 1,             // 1 -> use s_transform_rc module, 0 -> use naive method
+    parameter USE_PRECALC = 1
 )(
     input logic clk,                    // Clock
     input logic rst_n,                  // Synchronous reset active low
@@ -202,7 +203,7 @@ logic [511:0] Sigma_reg;
 always_ff @(posedge clk) begin : proc_m_reg
     if(~rst_n) begin
         m_reg <= '0;
-    end else if (s_axis_tvalid) begin
+    end else if (s_axis_tvalid && s_axis_tready) begin
         m_reg <= padded_data;
     end
 end
@@ -251,7 +252,7 @@ assign module_m = popcount(s_axis_tkeep);
 always_ff @(posedge clk) begin : proc_mod_m_reg
     if(~rst_n) begin
         mod_m_reg <= '0;
-    end else if (s_axis_tvalid) begin
+    end else if (s_axis_tvalid && s_axis_tready) begin
         if (s_axis_tlast) begin
             mod_m_reg <= module_m;
         end else begin
@@ -326,7 +327,8 @@ logic         s_axis_m_tvalid;
 logic         s_axis_m_tready;
 
 g_transform # (
-    .USE_S_RE       (USE_S_RE)
+    .USE_S_RE       (USE_S_RE),
+    .USE_PRECALC    (USE_PRECALC)
 ) g_instance (
     .clk            (clk),
     .rst_n          (rst_n),
