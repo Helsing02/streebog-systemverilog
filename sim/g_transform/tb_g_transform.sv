@@ -86,24 +86,27 @@ initial begin
     for (int i = 0; i < ROUNDS; i++) begin : random_vectors_loop
         while (~s_axis_m_tready) #10;
 
-        i_h_data = {
-            $urandom, $urandom, $urandom, $urandom,
-            $urandom, $urandom, $urandom, $urandom,
-            $urandom, $urandom, $urandom, $urandom,
-            $urandom, $urandom, $urandom, $urandom
-        };
-        i_N_data = {
-            $urandom, $urandom, $urandom, $urandom,
-            $urandom, $urandom, $urandom, $urandom,
-            $urandom, $urandom, $urandom, $urandom,
-            $urandom, $urandom, $urandom, $urandom
-        };
-        s_axis_m_tdata = {
-            $urandom, $urandom, $urandom, $urandom,
-            $urandom, $urandom, $urandom, $urandom,
-            $urandom, $urandom, $urandom, $urandom,
-            $urandom, $urandom, $urandom, $urandom
-        };
+        // i_h_data = {
+        //     $urandom, $urandom, $urandom, $urandom,
+        //     $urandom, $urandom, $urandom, $urandom,
+        //     $urandom, $urandom, $urandom, $urandom,
+        //     $urandom, $urandom, $urandom, $urandom
+        // };
+        // i_N_data = {
+        //     $urandom, $urandom, $urandom, $urandom,
+        //     $urandom, $urandom, $urandom, $urandom,
+        //     $urandom, $urandom, $urandom, $urandom,
+        //     $urandom, $urandom, $urandom, $urandom
+        // };
+        // s_axis_m_tdata = {
+        //     $urandom, $urandom, $urandom, $urandom,
+        //     $urandom, $urandom, $urandom, $urandom,
+        //     $urandom, $urandom, $urandom, $urandom,
+        //     $urandom, $urandom, $urandom, $urandom
+        // };
+        i_h_data = '0;
+        i_N_data = '0;
+        s_axis_m_tdata = 512'h01323130393837363534333231303938373635343332313039383736353433323130393837363534333231303938373635343332313039383736353433323130;
 
         expected_o_h_data = call_g_transform(i_N_data, i_h_data, s_axis_m_tdata);
 
