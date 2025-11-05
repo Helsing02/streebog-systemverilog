@@ -10,6 +10,7 @@ import "DPI-C" function void stribog_S_transform(inout byte unsigned block[64]);
 import "DPI-C" function void stribog_P_transform(inout byte unsigned block[64]);
 import "DPI-C" function void stribog_L_transform(inout byte unsigned block[64]);
 
+logic         clk;
 logic [511:0] i_data_a;
 logic [511:0] i_data_b;
 logic [511:0] o_data;
@@ -34,15 +35,17 @@ endfunction
 
 // Initialize DUT
 lpsx_transform dut (
+    .clk     (clk),
     .i_data_a(i_data_a),
     .i_data_b(i_data_b),
     .o_data  (o_data)
 );
 
 initial begin
-    int i;
+    clk = 0;
+    # 3;
     // Test random vectors
-    for (i = 0; i < ROUNDS; i++) begin : random_vectors_loop
+    for (int i = 0; i < ROUNDS; i++) begin : random_vectors_loop
         i_data_a = {
             $urandom, $urandom, $urandom, $urandom,
             $urandom, $urandom, $urandom, $urandom,
@@ -61,12 +64,16 @@ initial begin
         assert (o_data == expected_o_data) else begin
             $display("Input data_a:  %h", i_data_a);
             $display("Input data_b:  %h", i_data_b);
-            $error("ASSERTION FAILED:\n dut_output = %h\n expected = %h", o_data, expected_o_data);
+            $error("ASSERTION FAILED:\n dut_output = %h\n expected  =  %h", o_data, expected_o_data);
             $stop;
         end
     end
     $stop;
 
+end
+
+always begin
+    #5; clk = ~clk;
 end
 
 endmodule : tb_lpsx_transform

@@ -14,7 +14,8 @@
 // -----------------------------------------------------------------------------
 
 module hash # (
-    parameter USE_S_RE = 0              // 1 -> use s_transform_rc module, 0 -> use naive method
+    parameter USE_S_RE = 1,             // 1 -> use s_transform_rc module, 0 -> use naive method
+    parameter USE_PRECALC = 1
 )(
     input logic clk,                    // Clock
     input logic rst_n,                  // Synchronous reset active low
@@ -98,14 +99,14 @@ always_comb begin
     case (block_hash_state)
         BLOCK_IDLE:    block_hash_nextstate = (M) ? T1 : BLOCK_IDLE;
         T1:      block_hash_nextstate = T2;
-        T2:      block_hash_nextstate = (o_h_valid) ? T3 : T2;
-        T3:      block_hash_nextstate = BLOCK_IDLE;
+        T2:      block_hash_nextstate = T3;
+        T3:      block_hash_nextstate = (o_h_valid) ? BLOCK_IDLE : T3;
         default: block_hash_nextstate = BLOCK_IDLE;
     endcase
 end
 
 // Outputs
-assign R = block_hash_state == T3;
+assign R = block_hash_nextstate == BLOCK_IDLE && block_hash_state == T3;
 assign block_hash_m_tvalid = block_hash_state == T1;
 
 
@@ -175,8 +176,8 @@ end
 // Output encodings derived from main_state:
 //  - M indicates we are in message-processing phase and should drive block FSM.
 //  - s_axis_tready is asserted only in IDLE to implement simple AXIS flow-control.
-assign M = (main_state == S2) || (main_state == S3) ||
-           (main_state == S4) || (main_state == S5);
+assign M = (main_nextstate == S2) || (main_nextstate == S3) ||
+           (main_nextstate == S4) || (main_nextstate == S5);
 assign main_m_tvalid = (main_state == S6) || (main_state == S8);
 assign s_axis_tready = main_state == IDLE;
 assign m_axis_tvalid = main_state == READY;
@@ -202,7 +203,7 @@ logic [511:0] Sigma_reg;
 always_ff @(posedge clk) begin : proc_m_reg
     if(~rst_n) begin
         m_reg <= '0;
-    end else if (s_axis_tvalid) begin
+    end else if (s_axis_tvalid && s_axis_tready) begin
         m_reg <= padded_data;
     end
 end
@@ -218,7 +219,7 @@ assign new_Sigma = m_reg + Sigma_reg;
 always_ff @(posedge clk) begin : proc_Sigma_reg
     if(~rst_n || main_state == INITIAL) begin
         Sigma_reg <= '0;
-    end else if (block_hash_state == T3) begin
+    end else if (block_hash_state == T2) begin
         Sigma_reg <= new_Sigma;
     end
 end
@@ -251,7 +252,7 @@ assign module_m = popcount(s_axis_tkeep);
 always_ff @(posedge clk) begin : proc_mod_m_reg
     if(~rst_n) begin
         mod_m_reg <= '0;
-    end else if (s_axis_tvalid) begin
+    end else if (s_axis_tvalid && s_axis_tready) begin
         if (s_axis_tlast) begin
             mod_m_reg <= module_m;
         end else begin
@@ -272,7 +273,7 @@ assign new_N = (mod_m_reg << 3) + N_reg;
 always_ff @(posedge clk) begin : proc_N_reg
     if(~rst_n || main_state == INITIAL) begin
         N_reg <= '0;
-    end else if (block_hash_state == T3) begin
+    end else if (block_hash_state == T2) begin
         N_reg <= new_N;
     end
 end
@@ -326,7 +327,8 @@ logic         s_axis_m_tvalid;
 logic         s_axis_m_tready;
 
 g_transform # (
-    .USE_S_RE       (USE_S_RE)
+    .USE_S_RE       (USE_S_RE),
+    .USE_PRECALC    (USE_PRECALC)
 ) g_instance (
     .clk            (clk),
     .rst_n          (rst_n),

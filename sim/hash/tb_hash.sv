@@ -38,7 +38,10 @@ logic [63:0]  m_axis_tkeep;
 logic         m_axis_tlast;
 
 // Initialize DUT
-hash dut (
+hash # (
+    .USE_S_RE   (1),
+    .USE_PRECALC(0)
+) dut (
     .clk          (clk),
     .rst_n        (rst_n),
 
@@ -123,6 +126,41 @@ initial begin
     rst_n = 0;
     #10;
     rst_n = 1;
+
+    // Test A1.1
+    mode = 1;
+    call_init(mode);
+    s_axis_tdata = 512'h323130393837363534333231303938373635343332313039383736353433323130393837363534333231303938373635343332313039383736353433323130;
+    s_axis_tkeep = 64'h7FFFFFFFFFFFFFFF;
+    s_axis_tvalid = 1'b1;
+    s_axis_tlast = 1'b1;
+
+    call_update(s_axis_tdata, 63);
+
+    while (~s_axis_tready) #10;
+
+    #3;
+
+    s_axis_tvalid = 1'b0;
+
+
+    while (m_axis_tvalid != 1) #1;
+
+    #3;
+
+    expected_m_axis_tdata = call_final();
+
+    assert (m_axis_tkeep == expected_m_axis_tkeep) else begin
+        $error("ASSERTION FAILED:\n dut_output_tkeep = %h\n expected_tkeep = %h", m_axis_tkeep, expected_m_axis_tkeep);
+        $stop;
+    end
+
+    assert (m_axis_tdata == expected_m_axis_tdata) else begin
+        $error("ASSERTION FAILED:\n dut_output = %h\n expected = %h", m_axis_tdata, expected_m_axis_tdata);
+        $stop;
+    end
+
+
     // Test random vectors
     for (int i = 0; i < ROUNDS; i++) begin : random_vectors_loop
         mode = $urandom % 2;

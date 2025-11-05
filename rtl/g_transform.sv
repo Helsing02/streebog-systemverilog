@@ -10,7 +10,8 @@
 // -----------------------------------------------------------------------------
 
 module g_transform # (
-    parameter USE_S_RE = 1                  // 1 -> use s_transform_rc module, 0 -> use naive method
+    parameter USE_S_RE = 1,                 // 1 -> use s_transform_rc module, 0 -> use naive method
+    parameter USE_PRECALC = 1
 )(
     input logic clk,                        // Clock
     input logic rst_n,                      // Synchronous reset active low
@@ -45,16 +46,34 @@ const logic [511:0] C[0:11] = {
     512'h378ee767f11631bad21380b00449b17acda43c32bcdf1d77f82012d430219f9b5d80ef9d1891cc86e71da4aa88e12852faf417d5d9b21b9948bc924af11bd720
 };
 
+
+logic [511:0] key_reg;
+logic [511:0] m_reg;
+logic [511:0] m_xor_h_reg;
+
+logic [511:0] i_data_a_key;
+logic [511:0] i_data_b_key;
+logic         i_valid_key;
+
+logic [511:0] o_data_key;
+logic         o_valid_key;
+
+logic [511:0] o_data_m;
+
+logic i_valid_m;
+logic o_valid_m;
+
 // ======================== G transform calculation FSM ========================
 // FSM state encoding:
 //  - IDLE: Wait for valid message input.
 //  - S1..S13: Execute 13 internal rounds (one per clock).
 //  - READY: Output valid hash value, then return to IDLE.
-typedef enum logic [3:0] {
+typedef enum logic [4:0] {
     IDLE, S1,  S2,  S3,
     S4,   S5,  S6,  S7,
     S8,   S9,  S10, S11,
-    S12,  S13, READY
+    S12,  S13, READY,
+    K1_WAIT, K2_WAIT, K3_WAIT, K4_WAIT, K5_WAIT, K6_WAIT, K7_WAIT, K8_WAIT, K9_WAIT, K10_WAIT, K11_WAIT, K12_WAIT, K13_WAIT
 } statetype;
 
 statetype state, nextstate;
@@ -75,40 +94,59 @@ end
 // Determines next state based on current state and handshaking signals.
 always_comb begin
     case (state)
-        IDLE:    nextstate = (s_axis_m_tvalid == 1) ? S1 : IDLE;
-        S1:      nextstate = S2;
-        S2:      nextstate = S3;
-        S3:      nextstate = S4;
-        S4:      nextstate = S5;
-        S5:      nextstate = S6;
-        S6:      nextstate = S7;
-        S7:      nextstate = S8;
-        S8:      nextstate = S9;
-        S9:      nextstate = S10;
-        S10:     nextstate = S11;
-        S11:     nextstate = S12;
-        S12:     nextstate = S13;
-        S13:     nextstate = READY;
-        READY:   nextstate = IDLE;
-        default: nextstate = IDLE;
+        IDLE:     nextstate = ~s_axis_m_tvalid ? IDLE    :
+                              ~o_valid_key     ? K1_WAIT :
+                                                 S1;
+        K1_WAIT:  nextstate = o_valid_key ? S1 : K1_WAIT;
+
+        S1:       nextstate = o_valid_key ? S2 : K2_WAIT;
+        K2_WAIT:  nextstate = o_valid_key ? S2 : K2_WAIT;
+
+        S2:       nextstate = o_valid_key ? S3 : K3_WAIT;
+        K3_WAIT:  nextstate = o_valid_key ? S3 : K3_WAIT;
+
+        S3:       nextstate = o_valid_key ? S4 : K4_WAIT;
+        K4_WAIT:  nextstate = o_valid_key ? S4 : K4_WAIT;
+
+        S4:       nextstate = o_valid_key ? S5 : K5_WAIT;
+        K5_WAIT:  nextstate = o_valid_key ? S5 : K5_WAIT;
+
+        S5:       nextstate = o_valid_key ? S6 : K6_WAIT;
+        K6_WAIT:  nextstate = o_valid_key ? S6 : K6_WAIT;
+
+        S6:       nextstate = o_valid_key ? S7 : K7_WAIT;
+        K7_WAIT:  nextstate = o_valid_key ? S7 : K7_WAIT;
+
+        S7:       nextstate = o_valid_key ? S8 : K8_WAIT;
+        K8_WAIT:  nextstate = o_valid_key ? S8 : K8_WAIT;
+
+        S8:       nextstate = o_valid_key ? S9 : K9_WAIT;
+        K9_WAIT:  nextstate = o_valid_key ? S9 : K9_WAIT;
+
+        S9:       nextstate = o_valid_key ? S10 : K10_WAIT;
+        K10_WAIT: nextstate = o_valid_key ? S10 : K10_WAIT;
+
+        S10:      nextstate = o_valid_key ? S11 : K11_WAIT;
+        K11_WAIT: nextstate = o_valid_key ? S11 : K11_WAIT;
+
+        S11:      nextstate = o_valid_key ? S12 : K12_WAIT;
+        K12_WAIT: nextstate = o_valid_key ? S12 : K12_WAIT;
+
+        S12:      nextstate = o_valid_key ? S13 : K13_WAIT;
+        K13_WAIT: nextstate = o_valid_key ? S13 : K13_WAIT;
+
+        S13:      nextstate = READY;
+        READY:    nextstate = IDLE;
+        default:  nextstate = IDLE;
     endcase
 end
-
-logic [511:0] key_reg;
-logic [511:0] m_reg;
-logic [511:0] m_xor_h_reg;
-
-logic [511:0] i_data_a_key;
-logic [511:0] i_data_b_key;
-logic [511:0] o_data_key;
-logic [511:0] o_data_m;
 
 // Store current key value
 // Obtained from output of LSPX for key
 always_ff @(posedge clk) begin : proc_key_reg
     if(~rst_n) begin
         key_reg <= '0;
-    end else begin
+    end else if (o_valid_key) begin
         key_reg <= o_data_key;
     end
 end
@@ -118,8 +156,10 @@ end
 always_ff @(posedge clk) begin : proc_m_reg
     if(~rst_n) begin
         m_reg <= '0;
-    end else begin
-        m_reg <= (state == IDLE) ? s_axis_m_tdata : o_data_m;
+    end else if (state == IDLE) begin
+        m_reg <= s_axis_m_tdata;
+    end else if (o_valid_m) begin
+        m_reg <= o_data_m;
     end
 end
 
@@ -145,20 +185,38 @@ end
 
 // Instantite two LPSX
 lpsx_transform # (
-    .USE_S_RE(USE_S_RE)
+    .USE_S_RE   (USE_S_RE),
+    .USE_PRECALC(USE_PRECALC)
 ) lpsx_for_key (
+    .clk     (clk),
+    .rst_n   (rst_n),
+
     .i_data_a(i_data_a_key),
     .i_data_b(i_data_b_key),
-    .o_data  (o_data_key)
+    .i_valid (i_valid_key),
+
+    .o_data  (o_data_key),
+    .o_valid (o_valid_key)
 );
 
+assign i_valid_key = (state == IDLE && s_axis_m_tvalid) || (state >= S1) && (state <= S12);
+
 lpsx_transform # (
-    .USE_S_RE(USE_S_RE)
+    .USE_S_RE   (USE_S_RE),
+    .USE_PRECALC(USE_PRECALC)
 ) lpsx_for_m (
+    .clk     (clk),
+    .rst_n   (rst_n),
+
     .i_data_a(m_reg),
     .i_data_b(key_reg),
-    .o_data  (o_data_m)
+    .i_valid (i_valid_m),
+
+    .o_data  (o_data_m),
+    .o_valid (o_valid_m)
 );
+
+assign i_valid_m = (state >= S1) && (state <= S12);
 
 assign i_data_a_key = (state == IDLE) ? i_h_data : key_reg;
 
