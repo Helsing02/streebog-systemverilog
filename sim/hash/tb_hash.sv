@@ -340,11 +340,11 @@ task automatic send_packet_and_check(string name, int msg_len);
             chunk_len = (remaining >= 64) ? 64 : remaining;
             // generate random block: fill chunk_len bytes, rest zero
             block = '0;
-            // for (int b = 0; b < chunk_len; b++) begin
-            //     block[b*8 +: 8] = $urandom_range(0,255);
-            // end
-            // block = 512'h323130393837363534333231303938373635343332313039383736353433323130393837363534333231303938373635343332313039383736353433323130;
-            block = 512'h0;
+            for (int b = 0; b < chunk_len; b++) begin
+                block[b*8 +: 8] = $urandom_range(0,255);
+            end
+            // // block = 512'h323130393837363534333231303938373635343332313039383736353433323130393837363534333231303938373635343332313039383736353433323130;
+            // block = 512'h0;
             remaining -= chunk_len;
             // if this is last chunk, mark is_last
             send_block_and_update_last(block, chunk_len, (remaining == 0));
@@ -511,7 +511,8 @@ task automatic test_back_to_back();
     while (remaining > 0) begin
         chunk = (remaining >= 64) ? 64 : remaining;
         block = '0;
-        for (int b = 0; b < chunk; b++) block[b*8 +: 8] = $urandom_range(0,255);
+        for (int b = 0; b < chunk; b++)
+            block[b*8 +: 8] = $urandom_range(0,255);
         // wait all ready and send
         wait_all_ready();
         s_axis_tdata = block;
