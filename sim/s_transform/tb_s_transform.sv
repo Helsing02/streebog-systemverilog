@@ -1,13 +1,45 @@
-`resetall
 `timescale 1ns / 1ps
+`default_nettype none
 
+// -----------------------------------------------------------------------------
+// Testbench for s_transform
+// Verifies byte-wise substitution correctness for two DUT parameterizations:
+//   - naive table mode (USE_S_RE = 0)
+//   - reverse-engineered mode (USE_S_RE = 1)
+// Test style and output are consistent with existing tb_p_transform.
+// -----------------------------------------------------------------------------
 module tb_s_transform;
 
+// -----------------------------------------------------------------------------
+// DUT I/O and reference signals
+// -----------------------------------------------------------------------------
 logic [511:0] i_data;
-logic [511:0] o_data;
-logic [511:0] expected_o_data;
+logic [511:0] o_naive;
+logic [511:0] o_re;
 
-logic [7:0] sbox [0:255] = {
+logic [511:0] expected;
+
+// Statistics
+int total_tests = 0; // counts checks (2 per stimulus: naive + re)
+int errors = 0;
+
+// -----------------------------------------------------------------------------
+// DUT Instances (two parameter sets)
+// -----------------------------------------------------------------------------
+s_transform #(.USE_S_RE(0)) dut_naive (
+    .i_data(i_data),
+    .o_data(o_naive)
+);
+
+s_transform #(.USE_S_RE(1)) dut_re (
+    .i_data(i_data),
+    .o_data(o_re)
+);
+
+// -----------------------------------------------------------------------------
+// Reference S-box
+// -----------------------------------------------------------------------------
+const logic [7:0] SBOX_REF [0:255] = '{
     8'hFC, 8'hEE, 8'hDD, 8'h11, 8'hCF, 8'h6E, 8'h31, 8'h16, 8'hFB, 8'hC4, 8'hFA, 8'hDA, 8'h23, 8'hC5, 8'h04, 8'h4D,
     8'hE9, 8'h77, 8'hF0, 8'hDB, 8'h93, 8'h2E, 8'h99, 8'hBA, 8'h17, 8'h36, 8'hF1, 8'hBB, 8'h14, 8'hCD, 8'h5F, 8'hC1,
     8'hF9, 8'h18, 8'h65, 8'h5A, 8'hE2, 8'h5C, 8'hEF, 8'h21, 8'h81, 8'h1C, 8'h3C, 8'h42, 8'h8B, 8'h01, 8'h8E, 8'h4F,
@@ -26,45 +58,108 @@ logic [7:0] sbox [0:255] = {
     8'h59, 8'hA6, 8'h74, 8'hD2, 8'hE6, 8'hF4, 8'hB4, 8'hC0, 8'hD1, 8'h66, 8'hAF, 8'hC2, 8'h39, 8'h4B, 8'h63, 8'hB6
 };
 
-// Function to assemble 512-bit expected_o_data from sbox array for i_data
-function logic [511:0] build_expected(input logic [511:0] input_val);
-    int i;
-    logic [7:0] byte_in;
-    logic [7:0] byte_out;
-    logic [511:0] result;
-    begin
-        for (i = 0; i < 64; i++) begin
-            byte_in = input_val[8*i +: 8];
-            byte_out = sbox[byte_in];
-            result[8*i +: 8] = byte_out;
-        end
-        return result;
+// -----------------------------------------------------------------------------
+// Reference model
+// -----------------------------------------------------------------------------
+function automatic [511:0] ref_naive(input [511:0] data);
+    for (int i = 0; i < 64; i++) begin
+        ref_naive[i*8 +: 8] = SBOX_REF[data[i*8 +: 8]];
     end
-endfunction
+endfunction : ref_naive
 
-// Initialize DUT
-s_transform dut (
-    .i_data(i_data),
-    .o_data(o_data)
-);
+// -----------------------------------------------------------------------------
+// Common check task (checks both DUT variants for single stimulus)
+// Matches style of tb_p_transform: compute expected, then #10, then compare.
+// -----------------------------------------------------------------------------
+task automatic check_result(string name);
+    // compute expected results before waiting (keeps waveform clean)
+    expected = ref_naive(i_data);
 
+    #10; // allow combinational outputs to settle
+
+    // naive DUT
+    total_tests++;
+    if (o_naive !== expected) begin
+        errors++;
+        $display("[FAIL]  naive : %s", name);
+        for (int i = 0; i < 64; i++) begin
+            if (o_naive[i*8 +: 8] !== expected[i*8 +: 8]) begin
+                $display("  Byte[%0d]: expected %02h, got %02h",
+                         i, expected[i*8 +: 8], o_naive[i*8 +: 8]);
+            end
+        end
+    end else begin
+        $display("[PASS]  naive : %s", name);
+    end
+
+    // reverse DUT
+    total_tests++;
+    if (o_re !== expected) begin
+        errors++;
+        $display("[FAIL]  reverse: %s", name);
+        for (int i = 0; i < 64; i++) begin
+            if (o_re[i*8 +: 8] !== expected[i*8 +: 8]) begin
+                $display("  Byte[%0d]: expected %02h, got %02h",
+                         i, expected[i*8 +: 8], o_re[i*8 +: 8]);
+            end
+        end
+    end else begin
+        $display("[PASS]  reverse: %s", name);
+    end
+endtask : check_result
+
+// -----------------------------------------------------------------------------
+// Test vectors (same structure & style as tb_p_transform)
+// -----------------------------------------------------------------------------
+task automatic test_sequential();
+    for (int start = 0; start < 256; start += 64) begin
+        for (int i = 0; i < 64; i++)
+            i_data[i*8 +: 8] = i[7:0] + start;
+        check_result($sformatf("Sequential pattern start=%0d", start));
+    end
+endtask : test_sequential
+
+task automatic test_random(int num = 10);
+    for (int n = 0; n < num; n++) begin
+        // build full 512-bit random value (16 x 32-bit words)
+        i_data = $urandom();
+        repeat (15) i_data = {i_data, $urandom()};
+        check_result($sformatf("Random #%0d", n));
+    end
+endtask : test_random
+
+// -----------------------------------------------------------------------------
+// Test sequence
+// -----------------------------------------------------------------------------
 initial begin
-    int part, idx;
-    for (part = 0; part < 4; part++) begin : part_loop
-        for (idx = 0; idx < 64; idx++) begin : initialize_input_loop
-            i_data[idx*8 +: 8] = idx[7:0] + 64 * part;
-        end
+    $display("\n=== s_transform Testbench ===");
 
-        expected_o_data = build_expected(i_data);
-        #10;
+    test_sequential();
+    test_random(10);
 
-        assert (o_data == expected_o_data) else begin
-            $display("Input:  %h", i_data);
-            $error("ASSERTION FAILED: dut_output = %h, expected %h", o_data, expected_o_data);
-            $stop;
-        end
-    end
-    $stop;
+    $display("\n----------------------------------");
+    $display(" Summary:");
+    $display("   Total tests : %0d", total_tests);
+    $display("   Errors       : %0d", errors);
+    if (errors == 0)
+        $display("   RESULT       : ALL TESTS PASSED");
+    else
+        $display("   RESULT       : SOME TESTS FAILED");
+
+    $display("----------------------------------\n");
+    $finish;
+end
+
+// -----------------------------------------------------------------------------
+// Optional sanity check: detect X/Z on outputs
+// -----------------------------------------------------------------------------
+always @(o_naive or o_re) begin
+    if (^o_naive === 1'bx)
+        $warning("Output (naive) contains X/Z at time %0t", $time);
+    if (^o_re === 1'bx)
+        $warning("Output (reverse) contains X/Z at time %0t", $time);
 end
 
 endmodule : tb_s_transform
+
+`default_nettype wire

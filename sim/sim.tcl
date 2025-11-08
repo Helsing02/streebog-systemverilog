@@ -98,6 +98,14 @@ eval $vsim_cmd
 
 # Добавляем волны по умолчанию
 add wave *
+add wave -position insertpoint sim:/tb_${module_name}/dut_precalc/*
+# add wave -position insertpoint sim:/tb_${module_name}/dut/rom*
+# add wave -position insertpoint sim:/tb_${module_name}/dut/g_instance/*
+# set signals {"main_nextstate" "main_state" "block_hash_nextstate" "block_hash_state" "g_instance/nextstate" "g_instance/state" "g_instance/s_axis_m_tdata" "g_instance/s_axis_m_tvalid"}
+# foreach signal $signals {
+#     add wave -position insertpoint sim:/tb_${module_name}/dut/$signal
+# }
+
 
 # Запуск симуляции
 puts "Runtime: $run_time"

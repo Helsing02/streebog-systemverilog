@@ -1,45 +1,124 @@
-`resetall
 `timescale 1ns / 1ps
+`default_nettype none
 
+// -----------------------------------------------------------------------------
+// Testbench for p_transform
+// Verifies byte-level permutation correctness with sequential and random inputs.
+// -----------------------------------------------------------------------------
 module tb_p_transform;
 
+// -----------------------------------------------------------------------------
+// DUT I/O
+// -----------------------------------------------------------------------------
 logic [511:0] i_data;
 logic [511:0] o_data;
-logic [511:0] expected_o_data = {
-    8'h0,  8'h8,  8'h16, 8'h24, 8'h32, 8'h40, 8'h48, 8'h56,
-    8'h1,  8'h9,  8'h17, 8'h25, 8'h33, 8'h41, 8'h49, 8'h57,
-    8'h2,  8'h10, 8'h18, 8'h26, 8'h34, 8'h42, 8'h50, 8'h58,
-    8'h3,  8'h11, 8'h19, 8'h27, 8'h35, 8'h43, 8'h51, 8'h59,
-    8'h4,  8'h12, 8'h20, 8'h28, 8'h36, 8'h44, 8'h52, 8'h60,
-    8'h5,  8'h13, 8'h21, 8'h29, 8'h37, 8'h45, 8'h53, 8'h61,
-    8'h6,  8'h14, 8'h22, 8'h30, 8'h38, 8'h46, 8'h54, 8'h62,
-    8'h7,  8'h15, 8'h23, 8'h31, 8'h39, 8'h47, 8'h55, 8'h63
-};
+logic [511:0] expected;
 
-// Initialize DUT
+// Statistics
+int total_tests = 0;
+int errors = 0;
+
+// -----------------------------------------------------------------------------
+// DUT Instance
+// -----------------------------------------------------------------------------
 p_transform dut (
     .i_data(i_data),
     .o_data(o_data)
 );
 
-initial begin
-    i_data = {
-        8'h0,  8'h1,  8'h2,  8'h3,  8'h4,  8'h5,  8'h6,  8'h7,
-        8'h8,  8'h9,  8'h10, 8'h11, 8'h12, 8'h13, 8'h14, 8'h15,
-        8'h16, 8'h17, 8'h18, 8'h19, 8'h20, 8'h21, 8'h22, 8'h23,
-        8'h24, 8'h25, 8'h26, 8'h27, 8'h28, 8'h29, 8'h30, 8'h31,
-        8'h32, 8'h33, 8'h34, 8'h35, 8'h36, 8'h37, 8'h38, 8'h39,
-        8'h40, 8'h41, 8'h42, 8'h43, 8'h44, 8'h45, 8'h46, 8'h47,
-        8'h48, 8'h49, 8'h50, 8'h51, 8'h52, 8'h53, 8'h54, 8'h55,
-        8'h56, 8'h57, 8'h58, 8'h59, 8'h60, 8'h61, 8'h62, 8'h63
-    };
-    #10;
-    assert (o_data == expected_o_data) else begin
-        $display("Input:  %h", i_data);
-        $error("ASSERTION FAILED: dut_output = %h, expected %h", o_data, expected_o_data);
-        $stop;
+// -----------------------------------------------------------------------------
+// Reference model
+// -----------------------------------------------------------------------------
+function automatic [511:0] ref_p_transform(input [511:0] data);
+    for (int i = 0; i < 64; i++) begin
+        int src_idx = (i * 8 + i / 8) % 64;
+        ref_p_transform[i*8 +: 8] = data[src_idx*8 +: 8];
     end
-    $stop;
+endfunction : ref_p_transform
+
+
+// -----------------------------------------------------------------------------
+// Common check task
+// -----------------------------------------------------------------------------
+task automatic check_result(string name);
+    expected = ref_p_transform(i_data);
+    #10;
+    total_tests++;
+    if (o_data !== expected) begin
+        errors++;
+        $display("[FAIL] %s", name);
+        for (int i = 0; i < 64; i++) begin
+            if (o_data[i*8 +: 8] !== expected[i*8 +: 8]) begin
+                $display("  Byte[%0d]: expected %02h, got %02h",
+                         i, expected[i*8 +: 8], o_data[i*8 +: 8]);
+            end
+        end
+    end else begin
+        $display("[PASS] %s", name);
+    end
+endtask : check_result
+
+// -----------------------------------------------------------------------------
+// Test: sequential bytes (0..63)
+// -----------------------------------------------------------------------------
+task automatic test_sequential();
+    for (int i = 0; i < 64; i++)
+        i_data[i*8 +: 8] = i[7:0];
+    check_result("Sequential pattern");
+endtask : test_sequential
+
+// -----------------------------------------------------------------------------
+// Test: all bytes equal (uniform)
+// -----------------------------------------------------------------------------
+task automatic test_uniform();
+    for (int val = 0; val < 4; val++) begin
+        i_data = {64{8'(val * 8'h11)}}; // 0x00, 0x11, 0x22, 0x33
+        check_result($sformatf("Uniform pattern 0x%02h", val * 8'h11));
+    end
+endtask : test_uniform
+
+// -----------------------------------------------------------------------------
+// Test: random inputs (coverage sweep)
+// -----------------------------------------------------------------------------
+task automatic test_random(int num = 10);
+    for (int n = 0; n < num; n++) begin
+        i_data = $urandom();
+        repeat (15) i_data = {i_data, $urandom()}; // fill all 512 bits
+        check_result($sformatf("Random #%0d", n));
+    end
+endtask : test_random
+
+// -----------------------------------------------------------------------------
+// Main test sequence
+// -----------------------------------------------------------------------------
+initial begin
+    $display("\n=== P Transform Testbench ===");
+
+    test_sequential();
+    test_uniform();
+    test_random(10);
+
+    $display("\n----------------------------------");
+    $display(" Summary:");
+    $display("   Total tests : %0d", total_tests);
+    $display("   Errors       : %0d", errors);
+    if (errors == 0)
+        $display("   RESULT       : ALL TESTS PASSED");
+    else
+        $display("   RESULT       : SOME TESTS FAILED");
+
+    $display("----------------------------------\n");
+    $finish;
 end
 
-endmodule
+// -----------------------------------------------------------------------------
+// Optional checks
+// -----------------------------------------------------------------------------
+always @(o_data) begin
+    if (^o_data === 1'bx)
+        $warning("Output contains X/Z at time %0t", $time);
+end
+
+endmodule : tb_p_transform
+
+`default_nettype wire

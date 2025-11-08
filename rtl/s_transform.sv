@@ -1,25 +1,30 @@
 // -----------------------------------------------------------------------------
 // S Transform
-// Nonlinear substitution stage that applies byte-wise substitution (S-box)
-// to the 512-bit input data block.
+// Nonlinear substitution stage (S-box) for a 512-bit block (64 bytes).
 //
 // Operation:
-//   Each byte of i_data is replaced by sbox[i_data[i]] or by the output
-//   of s_transform_re (depending on USE_S_RE parameter).
+//   - For each byte i of the 512-bit input vector `i_data` apply substitution:
+//       o_data[i] = S(i_data[i])
+//     where S is either the static S-box table or the reverse-engineered
+//     byte transform implemented by `s_transform_re`.
 //
 // Interface:
 //  - i_data : 512-bit input block (64 bytes)
 //  - o_data : 512-bit output block with substituted bytes
 //
 // Parameter:
-//  - USE_S_RE : selects substitution method
-//      0 -> direct table lookup (naive mode)
-//      1 -> uses s_transform_re module (reverse engineering method)
+//  - USE_S_RE : selects substitution implementation
+//       0 -> direct table lookup (naive mode, uses local sbox constant)
+//       1 -> use s_transform_re instances (reverse-engineered implementation)
 //
 // Notes:
-//  - Fully combinational logic, 64 independent byte substitutions.
-//  - Provides nonlinearity for cryptographic diffusion.
-// ----------------------------------
+//  - Fully combinational (no registers inside).
+//  - Each byte substitution is independent and mapped to a separate
+//    instance / table lookup to ease synthesis and reasoning.
+//  - The local S-box is declared as a constant array to be friendly for
+//    synthesis tools. If you plan to move the table into BRAM/ROM, consider
+//    using $readmemh / (* ram_style = "block" *) for larger designs.
+// -----------------------------------------------------------------------------
 
 module s_transform #(
     parameter USE_S_RE = 1          // 1 -> use s_transform_rc module, 0 -> use naive method
