@@ -343,8 +343,6 @@ task automatic send_packet_and_check(string name, int msg_len);
             for (int b = 0; b < chunk_len; b++) begin
                 block[b*8 +: 8] = $urandom_range(0,255);
             end
-            // // block = 512'h323130393837363534333231303938373635343332313039383736353433323130393837363534333231303938373635343332313039383736353433323130;
-            // block = 512'h0;
             remaining -= chunk_len;
             // if this is last chunk, mark is_last
             send_block_and_update_last(block, chunk_len, (remaining == 0));
