@@ -1,145 +1,179 @@
-// -----------------------------------------------------------------------------
-// S Transform (Reverse Engineered Version)
-// Implements the 8-bit substitution (S-box) operation using algebraic
-// transformations instead of a precomputed lookup table.
-//
-// Operation summary:
-//   - Input byte is first mixed with matrix α (alpha_matrix)
-//   - Then split into 4-bit halves (l, r) processed in GF(2⁴)
-//   - Applies nonlinear functions ν₀, ν₁, σ, φ and inversion over GF(16)
-//   - Final 8-bit result is obtained by matrix multiplication with ω (omega_matrix)
-//
-// Purpose:
-//   Provides an alternative, hardware-efficient implementation of S-box
-//   using smaller lookup tables and combinational arithmetic.
-//
-// Interface:
-//  - i_data : 8-bit input byte
-//  - o_data : 8-bit substituted output byte
-//
-// Notes:
-//  - Fully combinational (no sequential logic).
-//  - Optimized for synthesis with LUT-based FPGA fabrics.
-// -----------------------------------------------------------------------------
-
 module s_transform_re (
     input  logic [7:0] i_data,
     output logic [7:0] o_data
 );
-// -----------------------------------------------------------------------------
-// Lookup tables for nonlinear 4-bit functions (defined over GF(16)):
-//  - ν₀, ν₁    : nonlinear substitution layers
-//  - σ, φ      : intermediate transformation functions
-//  - inv_field : multiplicative inverses in GF(16)
-// -----------------------------------------------------------------------------
-logic [3:0] nu0 [0:15] =       '{4'h2,4'h5,4'h3,4'hb,4'h6,4'h9,4'he,4'ha,4'h0,4'h4,4'hf,4'h1,4'h8,4'hd,4'hc,4'h7};
-logic [3:0] nu1 [0:15] =       '{4'h7,4'h6,4'hc,4'h9,4'h0,4'hf,4'h8,4'h1,4'h4,4'h5,4'hb,4'he,4'hd,4'h2,4'h3,4'ha};
-logic [3:0] sigma [0:15] =     '{4'hc,4'hd,4'h0,4'h4,4'h8,4'hb,4'ha,4'he,4'h3,4'h9,4'h5,4'h2,4'hf,4'h1,4'h6,4'h7};
-logic [3:0] phi [0:15] =       '{4'hb,4'h2,4'hb,4'h8,4'hc,4'h4,4'h1,4'hc,4'h6,4'h3,4'h5,4'h8,4'he,4'h3,4'h6,4'hb};
-logic [3:0] inv_field [0:15] = '{4'h0,4'h1,4'hc,4'h8,4'h6,4'hf,4'h4,4'he,4'h3,4'hd,4'hb,4'ha,4'h2,4'h9,4'h7,4'h5};
 
-// -----------------------------------------------------------------------------
-// Linear transformation matrices α (alpha) and ω (omega)
-// Each defined as 8×8 binary matrices (one byte per row).
-// Used for input pre-processing and output post-processing respectively.
-// -----------------------------------------------------------------------------
-logic [7:0] alpha_matrix[0:7] = {
-    8'b00011000,
-    8'b01110100,
-    8'b00010001,
-    8'b00000010,
-    8'b10011010,
-    8'b00010100,
-    8'b00111010,
-    8'b01110000
-};
+    // Step 1
+    logic al_p1, alpha1, alpha2, alpha3, alpha4, alpha5, alpha6, alpha7, alpha8;
+    assign al_p1  = i_data[3] ^ i_data[1];
+    assign alpha1 = i_data[3];
+    assign alpha2 = i_data[6] ^ i_data[0];
+    assign alpha3 = alpha2 ^ i_data[1];
+    assign alpha4 = alpha2 ^ alpha5 ^ i_data[5] ^ i_data[2];
+    assign alpha5 = i_data[7] ^ al_p1;
+    assign alpha6 = i_data[6] ^ i_data[2];
+    assign alpha7 = i_data[4] ^ al_p1;
+    assign alpha8 = i_data[5];
 
-logic [7:0] omega_matrix[0:7] = {
-    8'b00010010,
-    8'b00000100,
-    8'b00100000,
-    8'b00010000,
-    8'b10011000,
-    8'b01000100,
-    8'b10010010,
-    8'b00000001
-};
+    // Step 2
+    logic r_is_zero;
+    assign r_is_zero = ~(alpha5 | alpha6 | alpha7 | alpha8);
+    logic [3:0] I_of_r;
+    I I_inst(
+        .x({alpha5, alpha6, alpha7, alpha8}),
+        .y(I_of_r)
+    );
 
-// -----------------------------------------------------------------------------
-// 8×8 binary matrix multiplication
-// Computes vector × matrix product over GF(2) using XOR arithmetic.
-// -----------------------------------------------------------------------------
-function logic [7:0] matmul8x8(input logic [7:0] x, input logic [7:0] matrix [7:0]);
-    logic [7:0] res;
-    integer i;
-    begin
-        res = 8'b0;
-        for (i = 0; i < 8; i++) begin
-            if(x[i]) begin
-                res ^= matrix[i];
-            end
+    logic [3:0] mult_result;
+    gf_mult mult_l_ir (
+        .x({alpha1, alpha2, alpha3, alpha4}),
+        .y(I_of_r),
+        .z(mult_result)
+    );
+
+    logic [3:0] nu0_of_l;
+    nu0 nu0_inst (
+        .x({alpha1, alpha2, alpha3, alpha4}),
+        .y(nu0_of_l)
+    );
+
+    logic [3:0] nu1_of_mult;
+    nu1 nu1_inst (
+        .x(mult_result),
+        .y(nu1_of_mult)
+    );
+
+    logic [3:0] l_step2;
+    localparam logic [3:0] NU1_OF_ZERO = {1'b0, 1'b1, 1'b1, 1'b1};
+    generate
+        for (genvar i = 0; i < 4; i++) begin
+            assign l_step2[i] = (r_is_zero & (nu0_of_l[i] ^ NU1_OF_ZERO[i])) ^ nu1_of_mult[i];
         end
-        return res;
-    end
-endfunction
+    endgenerate
 
+    // Step 3
+    logic [3:0] phi_of_l;
+    phi phi_inst(
+        .x(l_step2),
+        .y(phi_of_l)
+    );
 
-// -----------------------------------------------------------------------------
-// Multiplication in GF(2⁴) with primitive polynomial x⁴ + x³ + 1.
-// Performs bitwise multiply followed by modular reduction.
-// -----------------------------------------------------------------------------
-function logic [3:0] gf16_mul(input logic [3:0] a, input logic [3:0] b);
-    logic [7:0] p;
-    int i;
-    p = 0;
-    for (i = 0; i < 4; i++) begin
-        if (b[i]) p ^= (a << i);
-    end
-    // Редукция по X^4+X^3+1
-    for (i = 7; i >= 4; i--) begin
-        if (p[i]) p ^= (9 << (i - 4)); // 9 = 1001b corresponds X^4 + X^3 + 1
-    end
-    gf16_mul = p[3:0];
-endfunction
+    logic [3:0] mult_result2;
+    gf_mult mult_r_phil (
+        .x({alpha5, alpha6, alpha7, alpha8}),
+        .y(phi_of_l),
+        .z(mult_result2)
+    );
 
+    logic [3:0] r_step3;
+    sigma sigma_inst(
+        .x(mult_result2),
+        .y(r_step3)
+    );
 
-logic [3:0] l, r, l_new, r_new;
+    // Step 4
 
-// -----------------------------------------------------------------------------
-// Main substitution algorithm (combinational):
-// 1. Apply α-matrix transformation
-// 2. Split byte into 4-bit halves (l, r)
-// 3. Compute l_new using ν₀ or ν₁ depending on r
-// 4. Compute r_new = σ(r × φ(l_new))
-// 5. Combine (l_new, r_new) and apply ω-matrix transformation
-// -----------------------------------------------------------------------------
-always_comb begin
-    logic [7:0] tmp;
+    logic t1, t2;
+    assign t1 = l_step2[0] ^ r_step3[3];
+    assign t2 = t1 ^ r_step3[1];
 
-    // 1
-    tmp = matmul8x8(i_data, alpha_matrix);
-    l = tmp[7:4];
-    r = tmp[3:0];
+    assign o_data[7] = r_step3[3] ^ r_step3[1];
+    assign o_data[6] = r_step3[2];
+    assign o_data[5] = l_step2[1];
+    assign o_data[4] = l_step2[3] ^ t2;
+    assign o_data[3] = r_step3[3];
+    assign o_data[2] = l_step2[2] ^ r_step3[2];
+    assign o_data[1] = l_step2[3] ^ r_step3[1];
+    assign o_data[0] = r_step3[0];
 
-    // 2
-    if (r == 4'b0000) begin
-        l_new = nu0[l];
-    end else begin
-        // l_new = nu1(l * r^-1)
-        l_new = nu1[gf16_mul(l, inv_field[r])];
-    end
-
-    // 3
-    // r_new = sigma(r * phi(l_new))
-    r_new = sigma[gf16_mul(r, phi[l_new])];
-
-    // 4
-    // Final output transformation using ω-matrix
-    // Produces substituted 8-bit output value.
-    o_data = matmul8x8({l_new, r_new}, omega_matrix);
-end
-
-// -----------------------------------------------------------------------------
-// End of S Transform (Reverse Engineered)
-// -----------------------------------------------------------------------------
 endmodule : s_transform_re
+
+
+module I (
+    input  logic [3:0] x,
+    output logic [3:0] y
+);
+    logic p1, p2;
+    assign p1 = x[0] ^ x[2];
+    assign p2 = x[2] ^ x[3];
+
+    assign y[0] = (x[0] & ~x[1]) | (((x[0] ^ x[1]) | ~p1) & x[3]);
+    assign y[1] = (x[0] & x[2]) ^ (~x[1] & p1 & p2) ^ x[3];
+    assign y[2] = ((x[1] ^ x[3]) & ((x[0] | x[2]) ^ x[1])) ^ x[2];
+    assign y[3] = (x[1] & ~x[2]) | (((x[1] ^ x[2]) | p2) & x[0]);
+
+endmodule : I
+
+module gf_mult (
+    input  logic [3:0] x,
+    input  logic [3:0] y,
+    output logic [3:0] z
+);
+    logic p1, p2;
+    assign p1 = x[3] ^ x[2];
+    assign p2 = p1 ^ x[1];
+
+    assign z[3] = (p2 ^ x[0]) & y[3] ^ p2 & y[2] ^ p1 & y[1] ^ x[3] & y[0];
+    assign z[2] = x[3] & y[3] ^ x[0] & y[2] ^ x[1] & y[1] ^ x[2] & y[0];
+    assign z[1] = p1 & y[3] ^ x[3] & y[2] ^ x[0] & y[1] ^ x[1] & y[0];
+    assign z[0] = p2 & y[3] ^ p1 & y[2] ^ x[3] & y[1] ^ x[0] & y[0];
+
+endmodule : gf_mult
+
+module nu0 (
+    input  logic [3:0] x,
+    output logic [3:0] y
+);
+
+    logic p1;
+    assign p1 = x[0] | x[3];
+
+    assign y[0] = (x[1] & ~x[2]) | (((x[1] ^ x[2]) | (~x[1] ^ x[3])) & x[0]);
+    assign y[1] = (~((x[0] ^ x[2]) & x[3]) & x[1]) | ~p1;
+    assign y[2] = (x[1] & x[3]) ^ (((x[2] ^ x[3]) | ~x[1]) & x[0]) ^ (x[2] & ~x[3]);
+    assign y[3] = ((x[1] ^ p1) & x[2]) ^ ((x[0] ^ x[3]) & x[1]);
+
+endmodule : nu0
+
+
+module nu1 (
+    input  logic [3:0] x,
+    output logic [3:0] y
+);
+
+    logic p1;
+    assign p1 = x[0] ^ x[3];
+
+    assign y[0] = ~((x[1] | x[2]) ^ p1);
+    assign y[1] = ~(((x[2] | x[3]) ^ (x[0] & x[2])) | x[1]) ^ (x[1] & x[3]);
+    assign y[2] = ((x[1] ^ x[2]) & p1) ^ ~x[2];
+    assign y[3] = (x[2] & p1) ^ x[1];
+
+endmodule : nu1
+
+module phi (
+    input  logic [3:0] x,
+    output logic [3:0] y
+);
+
+    assign y[0] = (~((x[0] & ~x[1]) | (x[1] ^ x[3])) & x[2]) ^ (~x[1] & x[3]) ^ ~x[0];
+    assign y[1] = ~(((x[0] | x[3]) & x[1]) | x[2]) ^ (x[2] & x[3]);
+    assign y[2] = (~x[0] & x[3]) | (((x[0] | ~x[1]) ^ (x[0] & x[3])) & x[2]);
+    assign y[3] = (x[0] & x[1]) ^ (((x[2] | ~x[3]) ^ (x[1] & x[2])) & ~x[0]);
+
+endmodule : phi
+
+module sigma (
+    input  logic [3:0] x,
+    output logic [3:0] y
+);
+
+    logic p1;
+    assign p1 = x[0] ^ x[2];
+
+   assign y[0] = (x[0] & ~x[1]) | (~(x[1] & p1) & x[3]);
+   assign y[1] = (((x[2] | x[3]) ^ (x[1] & x[2])) & x[0]) ^ ((x[2] ^ x[3]) & x[1]) ^ x[3];
+   assign y[2] = (x[0] & x[1]) ^ (((x[0] & x[3]) ^ ~x[1]) & x[2]) ^ ~x[1] ^ x[3];
+   assign y[3] = (x[2] & ~x[3]) | ((~x[3] | p1) & ~x[1]);
+
+endmodule : sigma

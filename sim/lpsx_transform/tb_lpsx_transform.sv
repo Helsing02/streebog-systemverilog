@@ -137,6 +137,8 @@ task automatic check_vector(string case_name, logic [511:0] A, logic [511:0] B);
         i_data_b = B;
         i_valid  = 1'b1;
 
+        // Wait for registered output (one clock)
+        @(posedge clk);
         // Small settle time for combinational outputs
         #1;
 
@@ -162,12 +164,8 @@ task automatic check_vector(string case_name, logic [511:0] A, logic [511:0] B);
             $display("[PASS] reverse : %s", case_name);
         end
 
-        // For precalc: wait for registered output (one clock)
-        @(posedge clk);
-        // Small settle time for combinational outputs
-        #1;
         total_checks++;
-        if ((v_precalc !== 1'b1) || (o_precalc !== expected)) begin
+        if ((o_precalc !== expected) || (v_precalc !== 1'b1)) begin
             errors++;
             $display("[FAIL] precalc : %s", case_name);
             $display("  Expected: %h", expected);

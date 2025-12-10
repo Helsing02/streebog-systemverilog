@@ -22,7 +22,8 @@
 
 module hash # (
     parameter USE_S_RE = 1,
-    parameter USE_PRECALC = 1
+    parameter USE_PRECALC = 1,
+    parameter USE_DSP = 1
 )(
     input  logic         clk,
     input  logic         rst_n,
@@ -45,7 +46,13 @@ module hash # (
 );
 
 // -----------------------------------------------------------------------------
-// State machine declaration
+// Constants and Type Definitions
+// -----------------------------------------------------------------------------
+localparam logic [63:0] KEEP_512 = {64{1'b1}};
+localparam logic [63:0] KEEP_256 = {{32{1'b0}}, {32{1'b1}}};
+
+// -----------------------------------------------------------------------------
+// State and Control Signals
 // -----------------------------------------------------------------------------
 typedef enum logic [2:0] {
     IDLE,
@@ -58,21 +65,43 @@ typedef enum logic [2:0] {
 
 state_t state, nextstate;
 
-// -----------------------------------------------------------------------------
-// Local helper: popcount(64b)
-// -----------------------------------------------------------------------------
-function automatic logic [6:0] popcount(input logic [63:0] data);
-    logic [6:0] result;
-    integer i;
-    begin
-        result = 0;
-        for (i = 0; i < 64; i++) result += data[i];
-        return result;
-    end
-endfunction
+logic transform_in_progress;
+logic last_block_received;
+logic is_complete_block;
 
 // -----------------------------------------------------------------------------
-// Internal signals
+// Data Path Registers
+// -----------------------------------------------------------------------------
+logic [511:0] h_reg;         // Hash state register
+logic [511:0] m_reg;         // Latched padded block
+logic [511:0] Sigma_reg;     // Accumulator Σ
+logic [508:0] N_reg;         // Accumulator N (bytes)
+logic [6:0]   weight_m_reg;  // Byte weight of current block
+
+// -----------------------------------------------------------------------------
+// Intermediate Calculations
+// -----------------------------------------------------------------------------
+logic [511:0] N;             // Bit-length (N_reg << 3)
+logic [511:0] next_Sigma_value;
+logic [508:0] next_N_value;
+logic [6:0]   weight_m;
+
+// -----------------------------------------------------------------------------
+// AXI Stream Interface Signals
+// -----------------------------------------------------------------------------
+logic [511:0] s_axis_tdata_reg;
+logic         s_axis_tvalid_reg;
+logic         s_axis_tready_reg;
+logic [63:0]  s_axis_tkeep_reg;
+logic         s_axis_tlast_reg;
+
+logic input_handshake;
+logic output_handshake;
+logic input_valid_gated;
+logic internal_input_ready;
+
+// -----------------------------------------------------------------------------
+// g_transform Interface Signals
 // -----------------------------------------------------------------------------
 logic [511:0] padded_data;   // Padded message block
 logic [511:0] i_N_data;      // Current N value fed into g_transform
@@ -83,80 +112,53 @@ logic [511:0] s_axis_m_tdata;
 logic         s_axis_m_tvalid;
 logic         s_axis_m_tready;
 
-logic [511:0] m_reg;         // Latched padded block
-logic [511:0] Sigma_reg;     // Accumulator Σ
-logic [508:0] N_reg;         // Accumulator N (bytes)
-logic [511:0] h_reg;         // Hash state register
-
-logic [6:0]   weight_m;
-logic [6:0]   weight_m_reg;
-
-logic [511:0] N;             // Bit-length (N_reg << 3)
-logic [511:0] new_Sigma;
-logic [508:0] new_N;
-
-logic block_busy;
-logic input_last_seen;
-logic input_full_block;
-
-
-
 // -----------------------------------------------------------------------------
-// Initialization constants
+// Initialization Constants
 // -----------------------------------------------------------------------------
-localparam logic [63:0] KEEP_512 = {64{1'b1}};
-localparam logic [63:0] KEEP_256 = {{32{1'b0}}, {32{1'b1}}};
-
 logic [511:0] IV;
 assign IV           = (mode == 1) ? 512'h0 : {64{8'h01}};
 assign m_axis_tkeep = (mode == 1) ? KEEP_512 : KEEP_256;
 assign m_axis_tlast = 1'b1;
 
 // -----------------------------------------------------------------------------
-// Input latch (capture padded block)
+// Helper Functions
 // -----------------------------------------------------------------------------
-always_ff @(posedge clk) begin
-    if (~rst_n) begin
-        m_reg <= '0;
-    end else if (s_axis_tvalid && s_axis_tready) begin
-        m_reg <= padded_data;
-    end
-end
+function automatic logic [6:0] popcount(input logic [63:0] data);
+    return $countones(data);
+endfunction
 
 // -----------------------------------------------------------------------------
-// Mod_m (bytes per block)
+// Input Pipeline Stage
 // -----------------------------------------------------------------------------
-assign weight_m = popcount(s_axis_tkeep);
+assign input_valid_gated = s_axis_tvalid && !last_block_received;
+assign s_axis_tready = internal_input_ready && !last_block_received;
 
-always_ff @(posedge clk) begin
-    if (~rst_n) weight_m_reg <= 7'd0;
-    else if (s_axis_tvalid && s_axis_tready) begin
-        weight_m_reg <= s_axis_tlast ? weight_m : 7'd64;
-    end
-end
+axis_register #(
+    .DATA_WIDTH (512),
+    .USER_ENABLE(0),
+    .REG_TYPE   (1)
+) axis_reg_inst (
+    .clk(clk),
+    .rst(~rst_n),
 
-// -----------------------------------------------------------------------------
-// Accumulators (Σ, N)
-// -----------------------------------------------------------------------------
-assign new_N     = N_reg + {502'd0, weight_m_reg};
-assign new_Sigma = Sigma_reg + m_reg;
-assign N         = N_reg << 3; // Convert bytes → bits
+    .s_axis_tdata (padded_data),
+    .s_axis_tvalid(input_valid_gated),
+    .s_axis_tready(internal_input_ready),
+    .s_axis_tkeep (s_axis_tkeep),
+    .s_axis_tlast (s_axis_tlast),
 
-always_ff @(posedge clk) begin
-    if (~rst_n || (state == OUTPUT)) begin
-        N_reg     <= '0;
-        Sigma_reg <= '0;
-    end else if (o_h_valid) begin
-        if (state == PROCESS) begin
-            N_reg     <= new_N;
-            Sigma_reg <= new_Sigma;
-        end else if (state == PROCESS_CONST1)
-            Sigma_reg <= Sigma_reg + 512'h1;
-    end
-end
+    .m_axis_tdata (s_axis_tdata_reg),
+    .m_axis_tvalid(s_axis_tvalid_reg),
+    .m_axis_tready(s_axis_tready_reg),
+    .m_axis_tkeep (s_axis_tkeep_reg),
+    .m_axis_tlast (s_axis_tlast_reg)
+);
+
+assign input_handshake  = s_axis_tvalid_reg && s_axis_tready_reg;
+assign output_handshake = m_axis_tvalid && m_axis_tready;
 
 // -----------------------------------------------------------------------------
-// Padding stage
+// Padding Stage
 // -----------------------------------------------------------------------------
 padding padding_inst (
     .i_data(s_axis_tdata),
@@ -165,19 +167,92 @@ padding padding_inst (
 );
 
 // -----------------------------------------------------------------------------
-// Block busy logic (g_transform in-flight)
+// Input Data Capture
 // -----------------------------------------------------------------------------
-always_ff @(posedge clk) begin : proc_block_busy
-    if(~rst_n)
-        block_busy <= 1'b0;
-    else if (s_axis_m_tvalid)
-        block_busy <= 1'b1;
-    else if (o_h_valid)
-        block_busy <= 1'b0;
+always_ff @(posedge clk) begin
+    if (~rst_n) begin
+        m_reg <= '0;
+    end else if (input_handshake) begin
+        m_reg <= s_axis_tdata_reg;
+    end
 end
 
 // -----------------------------------------------------------------------------
-// g_transform instance
+// Byte Weight Calculation
+// -----------------------------------------------------------------------------
+assign weight_m = popcount(s_axis_tkeep_reg);
+
+always_ff @(posedge clk) begin
+    if (~rst_n) begin
+        weight_m_reg <= 7'd0;
+    end else if (input_handshake) begin
+        weight_m_reg <= weight_m;
+    end
+end
+
+// -----------------------------------------------------------------------------
+// Accumulators (N and Sigma)
+// -----------------------------------------------------------------------------
+assign N = N_reg << 3; // Convert bytes → bits
+
+// N accumulator: total bytes processed
+adder_512bit #(
+    .USE_DSP(USE_DSP)
+) N_adder (
+    .clk  (clk),
+    .rst_n(rst_n),
+
+    .valid_in(state == PROCESS && transform_in_progress),
+
+    .operand_a    ({3'd0, N_reg}),
+    .operand_b    ({505'd0, weight_m_reg}),
+    .sum_out  (next_N_value)
+);
+
+// Sigma accumulator: sum of all message blocks
+adder_512bit #(
+    .USE_DSP(USE_DSP)
+) Sigma_adder (
+    .clk  (clk),
+    .rst_n(rst_n),
+
+    .valid_in(state == PROCESS && transform_in_progress),
+
+    .operand_a    (Sigma_reg),
+    .operand_b    (m_reg),
+    .sum_out  (next_Sigma_value)
+);
+
+logic [511:0] next_Sigma_value_check;
+assign next_Sigma_value_check = Sigma_reg + m_reg - next_Sigma_value;
+
+always_ff @(posedge clk) begin
+    if (~rst_n || (state == OUTPUT)) begin
+        N_reg     <= '0;
+        Sigma_reg <= '0;
+    end else if (o_h_valid) begin
+        if (state == PROCESS && o_h_valid) begin
+            N_reg     <= next_N_value;
+            Sigma_reg <= next_Sigma_value;
+        end else if (state == PROCESS_CONST1) begin
+            Sigma_reg <= Sigma_reg + 512'h1;
+        end
+    end
+end
+
+// -----------------------------------------------------------------------------
+// Hash State Management
+// -----------------------------------------------------------------------------
+always_ff @(posedge clk) begin
+    if (~rst_n || (state == IDLE && s_axis_tvalid && s_axis_tready)) begin
+        h_reg <= IV;
+    end else if (o_h_valid) begin
+        h_reg <= o_h_data;
+    end
+end
+
+// -----------------------------------------------------------------------------
+// g_transform Instance
 // -----------------------------------------------------------------------------
 g_transform #(
     .USE_S_RE   (USE_S_RE),
@@ -197,86 +272,113 @@ g_transform #(
 assign i_N_data = (state == PROCESS || state == PROCESS_CONST1) ? N : 512'h0;
 
 // -----------------------------------------------------------------------------
-// FSM (control flow)
+// Transform Busy Logic
 // -----------------------------------------------------------------------------
-always_ff @(posedge clk) begin
-    if (~rst_n)
-        state <= IDLE;
-    else
-        state <= nextstate;
-end
-
-always_ff @(posedge clk) begin
-    if(~rst_n || (state == OUTPUT)) begin
-        input_last_seen  <= 1'b0;
-        input_full_block <= 1'b0;
-    end else if (s_axis_tvalid && s_axis_tready && s_axis_tlast) begin
-        input_last_seen  <= 1'b1;
-        input_full_block <= &s_axis_tkeep;
+always_ff @(posedge clk) begin : proc_transform_in_progress
+    if(~rst_n) begin
+        transform_in_progress <= 1'b0;
+    end else if (s_axis_m_tvalid) begin
+        transform_in_progress <= 1'b1;
+    end else if (o_h_valid) begin
+        transform_in_progress <= 1'b0;
     end
 end
 
+// -----------------------------------------------------------------------------
+// Input Status Tracking
+// -----------------------------------------------------------------------------
+always_ff @(posedge clk) begin
+    if(~rst_n || (state == OUTPUT)) begin
+        last_block_received  <= 1'b0;
+    end else if (input_handshake && s_axis_tlast_reg) begin
+        last_block_received  <= 1'b1;
+    end
+end
+
+always_ff @(posedge clk) begin
+    if(~rst_n) begin
+        is_complete_block <= 1'b0;
+    end else if (input_handshake && |s_axis_tkeep_reg) begin
+        is_complete_block <= &s_axis_tkeep_reg;
+    end
+end
+
+// -----------------------------------------------------------------------------
+// FSM State Transition
+// -----------------------------------------------------------------------------
+always_ff @(posedge clk) begin
+    if (~rst_n) begin
+        state <= IDLE;
+    end else begin
+        state <= nextstate;
+    end
+end
+
+// -----------------------------------------------------------------------------
+// FSM Next State Logic
+// -----------------------------------------------------------------------------
 always_comb begin
     unique case (state)
         IDLE: begin
-            if (s_axis_tvalid && s_axis_tready)
+            if (s_axis_tvalid && s_axis_tready) begin
                 nextstate = PROCESS;
-            else
+            end else begin
                 nextstate = IDLE;
+            end
         end
+
         PROCESS: begin
-            if (input_last_seen && o_h_valid)
-                nextstate = input_full_block ? PROCESS_CONST1 : FINAL_N;
-            else
+            if ((last_block_received && o_h_valid) || (s_axis_tlast_reg && !(|s_axis_tkeep_reg))) begin
+                nextstate = is_complete_block ? PROCESS_CONST1 : FINAL_N;
+            end else begin
                 nextstate = PROCESS;
+            end
         end
-        PROCESS_CONST1:
+
+        PROCESS_CONST1: begin
             nextstate = o_h_valid ? FINAL_N : PROCESS_CONST1;
-        FINAL_N:
-            nextstate = o_h_valid ? FINAL_SIG : FINAL_N;
-        FINAL_SIG: begin
-            if (o_h_valid)
-                nextstate = input_last_seen ? OUTPUT : IDLE;
-            else
-                nextstate = FINAL_SIG;
         end
-        OUTPUT:
+
+        FINAL_N: begin
+            nextstate = o_h_valid ? FINAL_SIG : FINAL_N;
+        end
+
+        FINAL_SIG: begin
+            if (o_h_valid) begin
+                nextstate = last_block_received ? OUTPUT : IDLE;
+            end else begin
+                nextstate = FINAL_SIG;
+            end
+        end
+
+        OUTPUT: begin
             nextstate = m_axis_tready ? IDLE : OUTPUT;
-        default:
+        end
+
+        default: begin
             nextstate = IDLE;
+        end
     endcase
 end
 
 // -----------------------------------------------------------------------------
-// Hash state update (H register)
+// g_transform Control Signals
 // -----------------------------------------------------------------------------
-always_ff @(posedge clk) begin
-    if (~rst_n || (m_axis_tvalid && m_axis_tready))
-        h_reg <= IV;
-    else if (state == IDLE)
-        h_reg <= IV;
-    if (o_h_valid)
-        h_reg <= o_h_data;
-end
-
-// -----------------------------------------------------------------------------
-// AXI-like handshake logic
-// -----------------------------------------------------------------------------
-assign s_axis_tready   = ~block_busy && (state == IDLE || state == PROCESS);
-assign s_axis_m_tvalid = ~block_busy && (s_axis_tvalid || (nextstate > PROCESS));
+assign s_axis_tready_reg   = rst_n && (state == IDLE || ~transform_in_progress && state == PROCESS);
+assign s_axis_m_tvalid = ~transform_in_progress && ((input_handshake && |s_axis_tkeep_reg) || (state > PROCESS && state < OUTPUT));
 
 always_comb begin
     unique case (state)
-        PROCESS:        s_axis_m_tdata = padded_data;
+        PROCESS:        s_axis_m_tdata = s_axis_tdata_reg;
         PROCESS_CONST1: s_axis_m_tdata = 512'h1;
         FINAL_N:        s_axis_m_tdata = N;
         FINAL_SIG:      s_axis_m_tdata = Sigma_reg;
-        default:        s_axis_m_tdata = padded_data;
+        default:        s_axis_m_tdata = s_axis_tdata_reg;
     endcase
 end
 
 // -----------------------------------------------------------------------------
-// Output assignment
+// Output Interface
 // -----------------------------------------------------------------------------
 assign m_axis_tdata  = mode ? h_reg : {256'h0, h_reg[511:256]};
 assign m_axis_tvalid = (state == OUTPUT);

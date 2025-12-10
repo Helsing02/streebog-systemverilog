@@ -3,10 +3,14 @@
 
 // -----------------------------------------------------------------------------
 // Testbench for hash
-// Verifies three configurations in parallel:
-//   - naive   : USE_S_RE=0, USE_PRECALC=0
-//   - reverse : USE_S_RE=1, USE_PRECALC=0
-//   - precalc : USE_PRECALC=1 (ROM-based precomputed path)
+// Verifies six configurations in parallel (all combinations of USE_S_RE,
+// USE_PRECALC, and USE_DSP):
+//   - naive_dsp0   : USE_S_RE=0, USE_PRECALC=0, USE_DSP=0
+//   - naive_dsp1   : USE_S_RE=0, USE_PRECALC=0, USE_DSP=1
+//   - reverse_dsp0 : USE_S_RE=1, USE_PRECALC=0, USE_DSP=0
+//   - reverse_dsp1 : USE_S_RE=1, USE_PRECALC=0, USE_DSP=1
+//   - precalc_dsp0 : USE_PRECALC=1, USE_DSP=0
+//   - precalc_dsp1 : USE_PRECALC=1, USE_DSP=1
 //
 // Approach:
 //   - Use DPI model (stribog_init / stribog_update / stribog_final) as golden.
@@ -20,7 +24,7 @@
 //
 // Notes:
 //   - Mode may be toggled between packets but must remain stable during a packet.
-//   - The testbench observes s_axis_tready from all 3 DUTs and only transmits when
+//   - The testbench observes s_axis_tready from all 6 DUTs and only transmits when
 //     all are ready (keeps test deterministic and comparable to prior benches).
 // -----------------------------------------------------------------------------
 
@@ -98,17 +102,26 @@ logic [511:0] s_axis_tdata;
 logic         s_axis_tvalid;
 logic [63:0]  s_axis_tkeep;
 logic         s_axis_tlast;
-logic         s_axis_tready_naive;
-logic         s_axis_tready_reverse;
-logic         s_axis_tready_precalc;
+logic         s_axis_tready_naive_dsp0;
+logic         s_axis_tready_naive_dsp1;
+logic         s_axis_tready_reverse_dsp0;
+logic         s_axis_tready_reverse_dsp1;
+logic         s_axis_tready_precalc_dsp0;
+logic         s_axis_tready_precalc_dsp1;
 
 // m_axis (outputs per DUT)
-logic [511:0] m_naive_data; logic m_naive_valid;
-logic [63:0]  m_naive_keep; logic m_naive_last;
-logic [511:0] m_reverse_data; logic m_reverse_valid;
-logic [63:0]  m_reverse_keep; logic m_reverse_last;
-logic [511:0] m_precalc_data; logic m_precalc_valid;
-logic [63:0]  m_precalc_keep; logic m_precalc_last;
+logic [511:0] m_naive_dsp0_data;   logic m_naive_dsp0_valid;
+logic [63:0]  m_naive_dsp0_keep;   logic m_naive_dsp0_last;
+logic [511:0] m_naive_dsp1_data;   logic m_naive_dsp1_valid;
+logic [63:0]  m_naive_dsp1_keep;   logic m_naive_dsp1_last;
+logic [511:0] m_reverse_dsp0_data; logic m_reverse_dsp0_valid;
+logic [63:0]  m_reverse_dsp0_keep; logic m_reverse_dsp0_last;
+logic [511:0] m_reverse_dsp1_data; logic m_reverse_dsp1_valid;
+logic [63:0]  m_reverse_dsp1_keep; logic m_reverse_dsp1_last;
+logic [511:0] m_precalc_dsp0_data; logic m_precalc_dsp0_valid;
+logic [63:0]  m_precalc_dsp0_keep; logic m_precalc_dsp0_last;
+logic [511:0] m_precalc_dsp1_data; logic m_precalc_dsp1_valid;
+logic [63:0]  m_precalc_dsp1_keep; logic m_precalc_dsp1_last;
 
 // m_axis_tready (we will always accept the result)
 logic m_axis_tready;
@@ -126,60 +139,114 @@ initial clk = 0;
 always #(CLK_PERIOD_NS/2) clk = ~clk;
 
 // -----------------------------------------------------------------------------
-// DUT instantiations (three variants)
+// DUT instantiations (six variants - 2x3 configurations)
 // -----------------------------------------------------------------------------
-hash #(.USE_S_RE(0), .USE_PRECALC(0)) dut_naive (
+hash #(.USE_S_RE(0), .USE_PRECALC(0), .USE_DSP(0)) dut_naive_dsp0 (
     .clk          (clk),
     .rst_n        (rst_n),
     .mode         (mode),
 
     .s_axis_tdata (s_axis_tdata),
     .s_axis_tvalid(s_axis_tvalid),
-    .s_axis_tready(s_axis_tready_naive),
+    .s_axis_tready(s_axis_tready_naive_dsp0),
     .s_axis_tkeep  (s_axis_tkeep),
     .s_axis_tlast  (s_axis_tlast),
 
-    .m_axis_tdata  (m_naive_data),
-    .m_axis_tvalid (m_naive_valid),
+    .m_axis_tdata  (m_naive_dsp0_data),
+    .m_axis_tvalid (m_naive_dsp0_valid),
     .m_axis_tready (m_axis_tready),
-    .m_axis_tkeep  (m_naive_keep),
-    .m_axis_tlast  (m_naive_last)
+    .m_axis_tkeep  (m_naive_dsp0_keep),
+    .m_axis_tlast  (m_naive_dsp0_last)
 );
 
-hash #(.USE_S_RE(1), .USE_PRECALC(0)) dut_reverse (
+hash #(.USE_S_RE(0), .USE_PRECALC(0), .USE_DSP(1)) dut_naive_dsp1 (
     .clk          (clk),
     .rst_n        (rst_n),
     .mode         (mode),
 
     .s_axis_tdata (s_axis_tdata),
     .s_axis_tvalid(s_axis_tvalid),
-    .s_axis_tready(s_axis_tready_reverse),
+    .s_axis_tready(s_axis_tready_naive_dsp1),
     .s_axis_tkeep  (s_axis_tkeep),
     .s_axis_tlast  (s_axis_tlast),
 
-    .m_axis_tdata  (m_reverse_data),
-    .m_axis_tvalid (m_reverse_valid),
+    .m_axis_tdata  (m_naive_dsp1_data),
+    .m_axis_tvalid (m_naive_dsp1_valid),
     .m_axis_tready (m_axis_tready),
-    .m_axis_tkeep  (m_reverse_keep),
-    .m_axis_tlast  (m_reverse_last)
+    .m_axis_tkeep  (m_naive_dsp1_keep),
+    .m_axis_tlast  (m_naive_dsp1_last)
 );
 
-hash #(.USE_PRECALC(1)) dut_precalc (
+hash #(.USE_S_RE(1), .USE_PRECALC(0), .USE_DSP(0)) dut_reverse_dsp0 (
     .clk          (clk),
     .rst_n        (rst_n),
     .mode         (mode),
 
     .s_axis_tdata (s_axis_tdata),
     .s_axis_tvalid(s_axis_tvalid),
-    .s_axis_tready(s_axis_tready_precalc),
+    .s_axis_tready(s_axis_tready_reverse_dsp0),
     .s_axis_tkeep  (s_axis_tkeep),
     .s_axis_tlast  (s_axis_tlast),
 
-    .m_axis_tdata  (m_precalc_data),
-    .m_axis_tvalid (m_precalc_valid),
+    .m_axis_tdata  (m_reverse_dsp0_data),
+    .m_axis_tvalid (m_reverse_dsp0_valid),
     .m_axis_tready (m_axis_tready),
-    .m_axis_tkeep  (m_precalc_keep),
-    .m_axis_tlast  (m_precalc_last)
+    .m_axis_tkeep  (m_reverse_dsp0_keep),
+    .m_axis_tlast  (m_reverse_dsp0_last)
+);
+
+hash #(.USE_S_RE(1), .USE_PRECALC(0), .USE_DSP(1)) dut_reverse_dsp1 (
+    .clk          (clk),
+    .rst_n        (rst_n),
+    .mode         (mode),
+
+    .s_axis_tdata (s_axis_tdata),
+    .s_axis_tvalid(s_axis_tvalid),
+    .s_axis_tready(s_axis_tready_reverse_dsp1),
+    .s_axis_tkeep  (s_axis_tkeep),
+    .s_axis_tlast  (s_axis_tlast),
+
+    .m_axis_tdata  (m_reverse_dsp1_data),
+    .m_axis_tvalid (m_reverse_dsp1_valid),
+    .m_axis_tready (m_axis_tready),
+    .m_axis_tkeep  (m_reverse_dsp1_keep),
+    .m_axis_tlast  (m_reverse_dsp1_last)
+);
+
+hash #(.USE_PRECALC(1), .USE_DSP(0)) dut_precalc_dsp0 (
+    .clk          (clk),
+    .rst_n        (rst_n),
+    .mode         (mode),
+
+    .s_axis_tdata (s_axis_tdata),
+    .s_axis_tvalid(s_axis_tvalid),
+    .s_axis_tready(s_axis_tready_precalc_dsp0),
+    .s_axis_tkeep  (s_axis_tkeep),
+    .s_axis_tlast  (s_axis_tlast),
+
+    .m_axis_tdata  (m_precalc_dsp0_data),
+    .m_axis_tvalid (m_precalc_dsp0_valid),
+    .m_axis_tready (m_axis_tready),
+    .m_axis_tkeep  (m_precalc_dsp0_keep),
+    .m_axis_tlast  (m_precalc_dsp0_last)
+);
+
+hash #(.USE_PRECALC(1), .USE_DSP(1)) dut_precalc_dsp1 (
+    .clk          (clk),
+    .rst_n        (rst_n),
+    .mode         (mode),
+
+    .s_axis_tdata (s_axis_tdata),
+    .s_axis_tvalid(s_axis_tvalid),
+    .s_axis_tready(s_axis_tready_precalc_dsp1),
+    .s_axis_tkeep  (s_axis_tkeep),
+    .s_axis_tlast  (s_axis_tlast),
+
+    .m_axis_tdata  (m_precalc_dsp1_data),
+    .m_axis_tvalid (m_precalc_dsp1_valid),
+    .m_axis_tready (m_axis_tready),
+    .m_axis_tkeep  (m_precalc_dsp1_keep),
+    .m_axis_tlast  (m_precalc_dsp1_last)
 );
 
 // Always-ready for outputs (consume DUT outputs immediately)
@@ -217,12 +284,17 @@ task automatic wait_all_ready(input int timeout_cycles = 200);
     int cycles;
     begin
         cycles = 0;
-        while (!(s_axis_tready_naive && s_axis_tready_reverse && s_axis_tready_precalc)) begin
+        while (!(s_axis_tready_naive_dsp0 && s_axis_tready_naive_dsp1 &&
+                 s_axis_tready_reverse_dsp0 && s_axis_tready_reverse_dsp1 &&
+                 s_axis_tready_precalc_dsp0 && s_axis_tready_precalc_dsp1)) begin
             @(posedge clk);
             cycles++;
             if (cycles >= timeout_cycles) begin
-                $display("[ERROR] Timeout waiting for all DUTs ready (cycles=%0d). ready_naive=%b ready_reverse=%b ready_precalc=%b",
-                         cycles, s_axis_tready_naive, s_axis_tready_reverse, s_axis_tready_precalc);
+                $display("[ERROR] Timeout waiting for all DUTs ready (cycles=%0d)", cycles);
+                $display("  naive_dsp0=%b, naive_dsp1=%b, reverse_dsp0=%b, reverse_dsp1=%b, precalc_dsp0=%b, precalc_dsp1=%b",
+                         s_axis_tready_naive_dsp0, s_axis_tready_naive_dsp1,
+                         s_axis_tready_reverse_dsp0, s_axis_tready_reverse_dsp1,
+                         s_axis_tready_precalc_dsp0, s_axis_tready_precalc_dsp1);
                 errors++;
                 disable wait_all_ready;
             end
@@ -230,55 +302,100 @@ task automatic wait_all_ready(input int timeout_cycles = 200);
     end
 endtask : wait_all_ready
 
-// Parallel wait for three outputs' valid flags, capture outputs and meta; timeout if any fails
+// Parallel wait for all six outputs' valid flags
 task automatic wait_for_all_outputs(
     input  int timeout_cycles,
-    output logic [511:0] got_naive, output logic [63:0] got_naive_keep, output logic got_naive_last, output bit ok_naive,
-    output logic [511:0] got_reverse, output logic [63:0] got_reverse_keep, output logic got_reverse_last, output bit ok_reverse,
-    output logic [511:0] got_precalc, output logic [63:0] got_precalc_keep, output logic got_precalc_last, output bit ok_precalc
+    output logic [511:0] got_naive_dsp0, output logic [63:0] got_naive_dsp0_keep, output logic got_naive_dsp0_last, output bit ok_naive_dsp0,
+    output logic [511:0] got_naive_dsp1, output logic [63:0] got_naive_dsp1_keep, output logic got_naive_dsp1_last, output bit ok_naive_dsp1,
+    output logic [511:0] got_reverse_dsp0, output logic [63:0] got_reverse_dsp0_keep, output logic got_reverse_dsp0_last, output bit ok_reverse_dsp0,
+    output logic [511:0] got_reverse_dsp1, output logic [63:0] got_reverse_dsp1_keep, output logic got_reverse_dsp1_last, output bit ok_reverse_dsp1,
+    output logic [511:0] got_precalc_dsp0, output logic [63:0] got_precalc_dsp0_keep, output logic got_precalc_dsp0_last, output bit ok_precalc_dsp0,
+    output logic [511:0] got_precalc_dsp1, output logic [63:0] got_precalc_dsp1_keep, output logic got_precalc_dsp1_last, output bit ok_precalc_dsp1
 );
     int cycles;
-    bit cap_naive = 0, cap_reverse = 0, cap_precalc = 0;
+    bit cap_naive_dsp0 = 0, cap_naive_dsp1 = 0;
+    bit cap_reverse_dsp0 = 0, cap_reverse_dsp1 = 0;
+    bit cap_precalc_dsp0 = 0, cap_precalc_dsp1 = 0;
     begin
-        ok_naive = 0; ok_reverse = 0; ok_precalc = 0;
-        got_naive = '0; got_reverse = '0; got_precalc = '0;
-        got_naive_keep = '0; got_reverse_keep = '0; got_precalc_keep = '0;
-        got_naive_last = 1'b0; got_reverse_last = 1'b0; got_precalc_last = 1'b0;
+        ok_naive_dsp0 = 0; ok_naive_dsp1 = 0;
+        ok_reverse_dsp0 = 0; ok_reverse_dsp1 = 0;
+        ok_precalc_dsp0 = 0; ok_precalc_dsp1 = 0;
+
+        got_naive_dsp0 = '0; got_naive_dsp1 = '0;
+        got_reverse_dsp0 = '0; got_reverse_dsp1 = '0;
+        got_precalc_dsp0 = '0; got_precalc_dsp1 = '0;
+
+        got_naive_dsp0_keep = '0; got_naive_dsp1_keep = '0;
+        got_reverse_dsp0_keep = '0; got_reverse_dsp1_keep = '0;
+        got_precalc_dsp0_keep = '0; got_precalc_dsp1_keep = '0;
+
+        got_naive_dsp0_last = 1'b0; got_naive_dsp1_last = 1'b0;
+        got_reverse_dsp0_last = 1'b0; got_reverse_dsp1_last = 1'b0;
+        got_precalc_dsp0_last = 1'b0; got_precalc_dsp1_last = 1'b0;
 
         cycles = 0;
-        while (!(cap_naive && cap_reverse && cap_precalc) && cycles < timeout_cycles) begin
+        while (!(cap_naive_dsp0 && cap_naive_dsp1 &&
+                 cap_reverse_dsp0 && cap_reverse_dsp1 &&
+                 cap_precalc_dsp0 && cap_precalc_dsp1) && cycles < timeout_cycles) begin
             @(posedge clk);
             cycles++;
 
-            if (m_naive_valid && !cap_naive) begin
-                got_naive = m_naive_data;
-                got_naive_keep = m_naive_keep;
-                got_naive_last = m_naive_last;
-                cap_naive = 1;
-                ok_naive = 1;
+            if (m_naive_dsp0_valid && !cap_naive_dsp0) begin
+                got_naive_dsp0 = m_naive_dsp0_data;
+                got_naive_dsp0_keep = m_naive_dsp0_keep;
+                got_naive_dsp0_last = m_naive_dsp0_last;
+                cap_naive_dsp0 = 1;
+                ok_naive_dsp0 = 1;
             end
 
-            if (m_reverse_valid && !cap_reverse) begin
-                got_reverse = m_reverse_data;
-                got_reverse_keep = m_reverse_keep;
-                got_reverse_last = m_reverse_last;
-                cap_reverse = 1;
-                ok_reverse = 1;
+            if (m_naive_dsp1_valid && !cap_naive_dsp1) begin
+                got_naive_dsp1 = m_naive_dsp1_data;
+                got_naive_dsp1_keep = m_naive_dsp1_keep;
+                got_naive_dsp1_last = m_naive_dsp1_last;
+                cap_naive_dsp1 = 1;
+                ok_naive_dsp1 = 1;
             end
 
-            if (m_precalc_valid && !cap_precalc) begin
-                got_precalc = m_precalc_data;
-                got_precalc_keep = m_precalc_keep;
-                got_precalc_last = m_precalc_last;
-                cap_precalc = 1;
-                ok_precalc = 1;
+            if (m_reverse_dsp0_valid && !cap_reverse_dsp0) begin
+                got_reverse_dsp0 = m_reverse_dsp0_data;
+                got_reverse_dsp0_keep = m_reverse_dsp0_keep;
+                got_reverse_dsp0_last = m_reverse_dsp0_last;
+                cap_reverse_dsp0 = 1;
+                ok_reverse_dsp0 = 1;
+            end
+
+            if (m_reverse_dsp1_valid && !cap_reverse_dsp1) begin
+                got_reverse_dsp1 = m_reverse_dsp1_data;
+                got_reverse_dsp1_keep = m_reverse_dsp1_keep;
+                got_reverse_dsp1_last = m_reverse_dsp1_last;
+                cap_reverse_dsp1 = 1;
+                ok_reverse_dsp1 = 1;
+            end
+
+            if (m_precalc_dsp0_valid && !cap_precalc_dsp0) begin
+                got_precalc_dsp0 = m_precalc_dsp0_data;
+                got_precalc_dsp0_keep = m_precalc_dsp0_keep;
+                got_precalc_dsp0_last = m_precalc_dsp0_last;
+                cap_precalc_dsp0 = 1;
+                ok_precalc_dsp0 = 1;
+            end
+
+            if (m_precalc_dsp1_valid && !cap_precalc_dsp1) begin
+                got_precalc_dsp1 = m_precalc_dsp1_data;
+                got_precalc_dsp1_keep = m_precalc_dsp1_keep;
+                got_precalc_dsp1_last = m_precalc_dsp1_last;
+                cap_precalc_dsp1 = 1;
+                ok_precalc_dsp1 = 1;
             end
         end
 
         // timeouts: mark failed ones
-        if (!cap_naive) ok_naive = 0;
-        if (!cap_reverse) ok_reverse = 0;
-        if (!cap_precalc) ok_precalc = 0;
+        if (!cap_naive_dsp0) ok_naive_dsp0 = 0;
+        if (!cap_naive_dsp1) ok_naive_dsp1 = 0;
+        if (!cap_reverse_dsp0) ok_reverse_dsp0 = 0;
+        if (!cap_reverse_dsp1) ok_reverse_dsp1 = 0;
+        if (!cap_precalc_dsp0) ok_precalc_dsp0 = 0;
+        if (!cap_precalc_dsp1) ok_precalc_dsp1 = 0;
     end
 endtask : wait_for_all_outputs
 
@@ -286,7 +403,6 @@ endtask : wait_for_all_outputs
 // Send one AXIS beat to DUTs (waits all ready, drives one-cycle valid)
 // Also calls DPI update once the beat is handshaken.
 // -----------------------------------------------------------------------------
-// Variant where caller indicates whether this is last beat
 task automatic send_block_and_update_last(
     input logic [511:0] block,
     input int len_bytes,
@@ -312,24 +428,70 @@ task automatic send_block_and_update_last(
 endtask : send_block_and_update_last
 
 // -----------------------------------------------------------------------------
-// High-level: submit a whole packet (message) to DUTs using AXIS beats. The
-// message is a byte-length `msg_len`. For simplicity a random byte stream is
-// generated. Mode must be set before calling this task and remains constant
-// during the packet.
+// Check function for each DUT instance
+// -----------------------------------------------------------------------------
+function automatic void check_dut_result(
+    string dut_name,
+    bit ok,
+    logic [511:0] got,
+    logic [511:0] expected,
+    logic [63:0] got_keep,
+    logic got_last,
+    logic mode,
+    ref int total_checks,
+    ref int errors
+);
+    logic [63:0] expected_keep;
+
+    total_checks++;
+    if (!ok) begin
+        errors++;
+        $display("[FAIL] %s : TIMED OUT waiting for output", dut_name);
+    end else begin
+        if (got !== expected) begin
+            errors++;
+            $display("[FAIL] %s : hash mismatch", dut_name);
+            $display("  expected: %h", expected);
+            $display("  got     : %h", got);
+        end else begin
+            $display("[PASS] %s", dut_name);
+        end
+        // check tkeep / tlast semantics
+        expected_keep = mode ? ~64'h0 : tkeep_from_len(32);
+        if (got_keep !== expected_keep) begin
+            errors++;
+            $display("[WARN] %s : m_axis_tkeep unexpected (got=%h expected=%h)",
+                    dut_name, got_keep, expected_keep);
+        end
+        if (got_last !== 1'b1) begin
+            errors++;
+            $display("[WARN] %s : m_axis_tlast not asserted as expected", dut_name);
+        end
+    end
+endfunction : check_dut_result
+
+// -----------------------------------------------------------------------------
+// High-level: submit a whole packet (message) to DUTs using AXIS beats.
 // -----------------------------------------------------------------------------
 task automatic send_packet_and_check(string name, int msg_len);
-    // scratch variables
+    logic [511:0] expected_out;
+    logic [511:0] got_naive_dsp0, got_naive_dsp1;
+    logic [511:0] got_reverse_dsp0, got_reverse_dsp1;
+    logic [511:0] got_precalc_dsp0, got_precalc_dsp1;
+    logic [63:0] got_naive_dsp0_keep, got_naive_dsp1_keep;
+    logic [63:0] got_reverse_dsp0_keep, got_reverse_dsp1_keep;
+    logic [63:0] got_precalc_dsp0_keep, got_precalc_dsp1_keep;
+    logic got_naive_dsp0_last, got_naive_dsp1_last;
+    logic got_reverse_dsp0_last, got_reverse_dsp1_last;
+    logic got_precalc_dsp0_last, got_precalc_dsp1_last;
+    bit ok_naive_dsp0, ok_naive_dsp1;
+    bit ok_reverse_dsp0, ok_reverse_dsp1;
+    bit ok_precalc_dsp0, ok_precalc_dsp1;
+
     int remaining;
     logic [511:0] block;
     int chunk_len;
-    logic [511:0] got_naive, got_reverse, got_precalc;
-    logic [63:0] got_naive_keep, got_reverse_keep, got_precalc_keep;
-    logic got_naive_last, got_reverse_last, got_precalc_last;
 
-    logic [511:0] expected_out;
-    logic [63:0]  expected_keep;
-
-    bit ok_naive, ok_reverse, ok_precalc;
     begin
         // init DPI context for this packet
         tb_stribog_init(mode);
@@ -353,86 +515,44 @@ task automatic send_packet_and_check(string name, int msg_len);
 
         // Wait and capture outputs in parallel
         wait_for_all_outputs(INT_TIMEOUT_CYCLES,
-            got_naive,   got_naive_keep,   got_naive_last,   ok_naive,
-            got_reverse, got_reverse_keep, got_reverse_last, ok_reverse,
-            got_precalc, got_precalc_keep, got_precalc_last, ok_precalc
+            got_naive_dsp0,   got_naive_dsp0_keep,   got_naive_dsp0_last,   ok_naive_dsp0,
+            got_naive_dsp1,   got_naive_dsp1_keep,   got_naive_dsp1_last,   ok_naive_dsp1,
+            got_reverse_dsp0, got_reverse_dsp0_keep, got_reverse_dsp0_last, ok_reverse_dsp0,
+            got_reverse_dsp1, got_reverse_dsp1_keep, got_reverse_dsp1_last, ok_reverse_dsp1,
+            got_precalc_dsp0, got_precalc_dsp0_keep, got_precalc_dsp0_last, ok_precalc_dsp0,
+            got_precalc_dsp1, got_precalc_dsp1_keep, got_precalc_dsp1_last, ok_precalc_dsp1
         );
 
-        // Evaluate naive
-        total_checks++;
-        if (!ok_naive) begin
-            errors++;
-            $display("[FAIL] %s : naive TIMED OUT waiting for output", name);
-        end else begin
-            if (got_naive !== expected_out) begin
-                errors++;
-                $display("[FAIL] %s : naive mismatch", name);
-                $display("  expected: %h", expected_out);
-                $display("  got     : %h", got_naive);
-            end else begin
-                $display("[PASS] %s : naive", name);
-            end
-            // check tkeep / tlast semantics
-            expected_keep = mode ? ~64'h0 : tkeep_from_len(32);
-            if (got_naive_keep !== expected_keep) begin
-                errors++;
-                $display("[WARN] %s : naive m_axis_tkeep unexpected (got=%h expected=%h)", name, got_naive_keep, expected_keep);
-            end
-            if (got_naive_last !== 1'b1) begin
-                errors++;
-                $display("[WARN] %s : naive m_axis_tlast not asserted as expected", name);
-            end
-        end
+        // Evaluate each DUT instance
+        check_dut_result($sformatf("%s : naive_dsp0", name),
+                        ok_naive_dsp0, got_naive_dsp0, expected_out,
+                        got_naive_dsp0_keep, got_naive_dsp0_last, mode,
+                        total_checks, errors);
 
-        // Evaluate reverse
-        total_checks++;
-        if (!ok_reverse) begin
-            errors++;
-            $display("[FAIL] %s : reverse TIMED OUT waiting for output", name);
-        end else begin
-            if (got_reverse !== expected_out) begin
-                errors++;
-                $display("[FAIL] %s : reverse mismatch", name);
-                $display("  expected: %h", expected_out);
-                $display("  got     : %h", got_reverse);
-            end else begin
-                $display("[PASS] %s : reverse", name);
-            end
-            expected_keep = mode ? ~64'h0 : tkeep_from_len(32);
-            if (got_reverse_keep !== expected_keep) begin
-                errors++;
-                $display("[WARN] %s : reverse m_axis_tkeep unexpected (got=%h expected=%h)", name, got_reverse_keep, expected_keep);
-            end
-            if (got_reverse_last !== 1'b1) begin
-                errors++;
-                $display("[WARN] %s : reverse m_axis_tlast not asserted as expected", name);
-            end
-        end
+        check_dut_result($sformatf("%s : naive_dsp1", name),
+                        ok_naive_dsp1, got_naive_dsp1, expected_out,
+                        got_naive_dsp1_keep, got_naive_dsp1_last, mode,
+                        total_checks, errors);
 
-        // Evaluate precalc
-        total_checks++;
-        if (!ok_precalc) begin
-            errors++;
-            $display("[FAIL] %s : precalc TIMED OUT waiting for output", name);
-        end else begin
-            if (got_precalc !== expected_out) begin
-                errors++;
-                $display("[FAIL] %s : precalc mismatch", name);
-                $display("  expected: %h", expected_out);
-                $display("  got     : %h", got_precalc);
-            end else begin
-                $display("[PASS] %s : precalc", name);
-            end
-            expected_keep = mode ? ~64'h0 : tkeep_from_len(32);
-            if (got_precalc_keep !== expected_keep) begin
-                errors++;
-                $display("[WARN] %s : precalc m_axis_tkeep unexpected (got=%h expected=%h)", name, got_precalc_keep, expected_keep);
-            end
-            if (got_precalc_last !== 1'b1) begin
-                errors++;
-                $display("[WARN] %s : precalc m_axis_tlast not asserted as expected", name);
-            end
-        end
+        check_dut_result($sformatf("%s : reverse_dsp0", name),
+                        ok_reverse_dsp0, got_reverse_dsp0, expected_out,
+                        got_reverse_dsp0_keep, got_reverse_dsp0_last, mode,
+                        total_checks, errors);
+
+        check_dut_result($sformatf("%s : reverse_dsp1", name),
+                        ok_reverse_dsp1, got_reverse_dsp1, expected_out,
+                        got_reverse_dsp1_keep, got_reverse_dsp1_last, mode,
+                        total_checks, errors);
+
+        check_dut_result($sformatf("%s : precalc_dsp0", name),
+                        ok_precalc_dsp0, got_precalc_dsp0, expected_out,
+                        got_precalc_dsp0_keep, got_precalc_dsp0_last, mode,
+                        total_checks, errors);
+
+        check_dut_result($sformatf("%s : precalc_dsp1", name),
+                        ok_precalc_dsp1, got_precalc_dsp1, expected_out,
+                        got_precalc_dsp1_keep, got_precalc_dsp1_last, mode,
+                        total_checks, errors);
 
         // short pause between packets
         repeat (1) @(posedge clk);
@@ -447,22 +567,17 @@ endtask : send_packet_and_check
 task automatic test_edge_cases();
     $display("\n--- test_edge_cases ---");
 
-    // 1) Zero-length message (should still process: send one beat with len=0 and tlast=1)
-    // According to AXIS semantics we still need to send a beat; we will send a 0-length final beat.
-    // mode = 1'b1; // 512-bit mode
-    // send_packet_and_check("edge zero-length (mode=512)", 0);
-
-    // 2) Single full block
+    // 1) Single full block
     mode = 1'b1;
     @(posedge clk);
     send_packet_and_check("edge single full block (mode=512)", 64);
 
-    // 3) Single partial block: 8 bytes example -> tkeep = 64'hFF
+    // 2) Single partial block: 8 bytes example -> tkeep = 64'hFF
     mode = 1'b0; // 256-bit mode (exercise both modes)
     @(posedge clk);
     send_packet_and_check("edge single partial 8B (mode=256)", 8);
 
-    // 4) small length (e.g., 33 bytes crossing boundary)
+    // 3) small length (e.g., 33 bytes crossing boundary)
     mode = 1'b1;
     @(posedge clk);
     send_packet_and_check("edge 33 bytes (mode=512)", 33);
@@ -484,21 +599,26 @@ task automatic test_random_packets(int n = ROUNDS);
 endtask : test_random_packets
 
 // Back-to-back attempt: try to submit second packet immediately and assert that
-// DUTs do not accept it if busy (we test that at least one ready signal is de-asserted)
+// DUTs do not accept it if busy
 task automatic test_back_to_back();
     logic [511:0] block;
     int chunk;
-    // create a short message of two beats so DUT will be busy after first
     int total_len1 = 128; // two full blocks
     int total_len2 = 64;
-    // build and send two beats manually, but do not wait for final capturing here
     int remaining = total_len1;
 
-    // wait outputs and discard in this test (we rely on generic tests for functional check)
-    logic [511:0] g_naive, g_reverse, g_precalc;
-    logic [63:0]  k_naive, k_reverse, k_precalc;
-    logic g_naive_last, g_reverse_last, g_precalc_last;
-    bit ok1, ok2, ok3;
+    logic [511:0] g_naive_dsp0, g_naive_dsp1;
+    logic [511:0] g_reverse_dsp0, g_reverse_dsp1;
+    logic [511:0] g_precalc_dsp0, g_precalc_dsp1;
+    logic [63:0]  k_naive_dsp0, k_naive_dsp1;
+    logic [63:0]  k_reverse_dsp0, k_reverse_dsp1;
+    logic [63:0]  k_precalc_dsp0, k_precalc_dsp1;
+    logic g_naive_dsp0_last, g_naive_dsp1_last;
+    logic g_reverse_dsp0_last, g_reverse_dsp1_last;
+    logic g_precalc_dsp0_last, g_precalc_dsp1_last;
+    bit ok_naive_dsp0, ok_naive_dsp1;
+    bit ok_reverse_dsp0, ok_reverse_dsp1;
+    bit ok_precalc_dsp0, ok_precalc_dsp1;
     logic [511:0] expected_out;
 
     mode = 1'b1;
@@ -525,45 +645,49 @@ task automatic test_back_to_back();
         @(posedge clk);
     end
     // Immediately try to send second packet on next cycle without waiting for all DUTs to become ready
-    // Prepare second packet first beat
     block = '0;
     for (int b = 0; b < 64; b++) block[b*8 +: 8] = $urandom_range(0,255);
     // Sample ready signals on next cycle
     @(posedge clk);
-    if (s_axis_tready_naive && s_axis_tready_reverse && s_axis_tready_precalc) begin
+    if (s_axis_tready_naive_dsp0 && s_axis_tready_naive_dsp1 &&
+        s_axis_tready_reverse_dsp0 && s_axis_tready_reverse_dsp1 &&
+        s_axis_tready_precalc_dsp0 && s_axis_tready_precalc_dsp1) begin
         $display("[WARN] back-to-back: unexpectedly all DUTs reported ready immediately after submit");
     end else begin
-        $display("[INFO] back-to-back: DUTs reported busy as expected (ready_naive=%b ready_reverse=%b ready_precalc=%b)",
-                 s_axis_tready_naive, s_axis_tready_reverse, s_axis_tready_precalc);
+        $display("[INFO] back-to-back: DUTs reported busy as expected");
+        $display("  naive_dsp0=%b, naive_dsp1=%b, reverse_dsp0=%b, reverse_dsp1=%b, precalc_dsp0=%b, precalc_dsp1=%b",
+                 s_axis_tready_naive_dsp0, s_axis_tready_naive_dsp1,
+                 s_axis_tready_reverse_dsp0, s_axis_tready_reverse_dsp1,
+                 s_axis_tready_precalc_dsp0, s_axis_tready_precalc_dsp1);
     end
 
     // Now wait for completion and then send second packet using standard flow and verify it
-    // finish first packet using final + capture through helper to keep logs consistent
     expected_out = tb_stribog_final(); // finalize first
-    wait_for_all_outputs(INT_TIMEOUT_CYCLES, g_naive, k_naive, g_naive_last, ok1,
-                                            g_reverse, k_reverse, g_reverse_last, ok2,
-                                            g_precalc, k_precalc, g_precalc_last, ok3);
+    wait_for_all_outputs(INT_TIMEOUT_CYCLES,
+        g_naive_dsp0, k_naive_dsp0, g_naive_dsp0_last, ok_naive_dsp0,
+        g_naive_dsp1, k_naive_dsp1, g_naive_dsp1_last, ok_naive_dsp1,
+        g_reverse_dsp0, k_reverse_dsp0, g_reverse_dsp0_last, ok_reverse_dsp0,
+        g_reverse_dsp1, k_reverse_dsp1, g_reverse_dsp1_last, ok_reverse_dsp1,
+        g_precalc_dsp0, k_precalc_dsp0, g_precalc_dsp0_last, ok_precalc_dsp0,
+        g_precalc_dsp1, k_precalc_dsp1, g_precalc_dsp1_last, ok_precalc_dsp1
+    );
     // Now send second packet normally via helper
     send_packet_and_check("back-to-back recovery packet", total_len2);
 endtask : test_back_to_back
 
 // Reset midstream: assert reset while a packet is being processed, then resume and verify correctness
 task automatic test_reset_midstream();
-    // prepare a 3-beat message
     int msg_len = 200; // multiple beats
-    // Collect blocks to an array to be able to resend after reset
-    logic [511:0] blocks[0:7]; // enough for msg_len<=512 -> up to 8 blocks
+    logic [511:0] blocks[0:7];
     int block_cnt = 0;
     int remaining = msg_len;
 
     $display("\n--- test_reset_midstream ---");
-    // initialize DPI ctx and also store full message blocks to replay after reset
     tb_stribog_init(1'b1);
     while (remaining > 0) begin
         int chunk = (remaining >= 64) ? 64 : remaining;
         blocks[block_cnt] = '0;
         for (int b = 0; b < chunk; b++) blocks[block_cnt][b*8 +: 8] = $urandom_range(0,255);
-        // send first two blocks, then issue reset in-flight
         if (block_cnt < 2) begin
             send_block_and_update_last(blocks[block_cnt], chunk, 0);
         end
@@ -576,7 +700,6 @@ task automatic test_reset_midstream();
     @(posedge clk);
     rst_n = 1'b1;
     // Re-send the same packet from scratch and compare result
-    // mode = 512
     mode = 1'b1;
     @(posedge clk);
     send_packet_and_check("reset midstream replay", msg_len);
@@ -586,7 +709,9 @@ endtask : test_reset_midstream
 // Top-level test sequence
 // -----------------------------------------------------------------------------
 initial begin
-    $display("\n=== hash Testbench ===");
+    $display("\n=== hash Testbench (6 configurations) ===");
+    $display("Testing all combinations of USE_S_RE, USE_PRECALC, and USE_DSP\n");
+
     // init input signals
     rst_n = 1'b0;
     mode = 1'b1;
@@ -619,10 +744,15 @@ end
 // -----------------------------------------------------------------------------
 // Sanity: warn if any DUT output contains X/Z
 // -----------------------------------------------------------------------------
-always @(m_naive_data or m_reverse_data or m_precalc_data) begin
-    if (^m_naive_data === 1'bx)  $warning("m_naive_data contains X/Z at time %0t", $time);
-    if (^m_reverse_data === 1'bx) $warning("m_reverse_data contains X/Z at time %0t", $time);
-    if (^m_precalc_data === 1'bx) $warning("m_precalc_data contains X/Z at time %0t", $time);
+always @(m_naive_dsp0_data or m_naive_dsp1_data or
+         m_reverse_dsp0_data or m_reverse_dsp1_data or
+         m_precalc_dsp0_data or m_precalc_dsp1_data) begin
+    if (^m_naive_dsp0_data === 1'bx)  $warning("m_naive_dsp0_data contains X/Z at time %0t", $time);
+    if (^m_naive_dsp1_data === 1'bx)  $warning("m_naive_dsp1_data contains X/Z at time %0t", $time);
+    if (^m_reverse_dsp0_data === 1'bx) $warning("m_reverse_dsp0_data contains X/Z at time %0t", $time);
+    if (^m_reverse_dsp1_data === 1'bx) $warning("m_reverse_dsp1_data contains X/Z at time %0t", $time);
+    if (^m_precalc_dsp0_data === 1'bx) $warning("m_precalc_dsp0_data contains X/Z at time %0t", $time);
+    if (^m_precalc_dsp1_data === 1'bx) $warning("m_precalc_dsp1_data contains X/Z at time %0t", $time);
 end
 
 endmodule : tb_hash

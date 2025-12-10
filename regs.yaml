@@ -1,0 +1,36 @@
+regmap:
+- name: MODE
+  description: Определяет размер выходного хеша (256/512 бит)
+  address: 0
+  bitfields:
+  - name: MODE_BIT
+    description: Бит режима (1=512, 0=256)
+    reset: 1
+    width: 1
+    lsb: 0
+    access: rw
+    hardware: o
+
+- name: TOTAL_NUM_TRANS
+  description: Defines num of tlast asserts from xdma
+  address: 4
+  bitfields:
+  - name: NUM_TRANS_VAL
+    description: Value from host
+    reset: 0
+    width: 32
+    lsb: 0
+    access: wo
+    hardware: o
+
+- name: RECV_NUM_TRANS
+  description: Tlast assert counter
+  address: 8
+  bitfields:
+  - name: NUM_TRANS_RECV
+    description: Keep num of received transactions
+    reset: 0
+    width: 32
+    lsb: 0
+    access: ro
+    hardware: io

@@ -9,4 +9,11 @@ files = [
    "rtl/padding.sv",
    "rtl/s_transform.sv",
    "rtl/s_transform_re.sv",
+   "rtl/adder_512bit.sv",
 ]
+
+modules = {
+  "local" : [
+    "core/"
+  ],
+}

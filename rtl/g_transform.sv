@@ -6,9 +6,6 @@
 // High-level behaviour:
 //  - IDLE   : wait for new message (s_axis_m_tvalid). Start key scheduling
 //             by asserting i_valid_key so lpsx_for_key starts producing.
-//  - WAIT   : transient state used when lpsx_for_key is sequential and the
-//             first key (or subsequent key) is not yet available in the same
-//             cycle as handshake; continue requesting key until o_valid_key.
 //  - RUNNING: process rounds 1..12. On each lpsx_for_key completion (o_valid_key)
 //             advance round counter. Also run lpsx_for_m in parallel (i_valid_m).
 //  - READY  : compute and present final o_h_data, assert o_h_valid for one cycle,
@@ -21,15 +18,12 @@
 //  - Typical timeline (per your design):
 //      1) On entering IDLE with s_axis_m_tvalid, lpsx_for_key is requested to
 //         produce K1 (i_valid_key asserted).
-//      2) When K1 is produced (o_valid_key), key_reg captures it.
-//      3) On next round the lpsx_for_m uses the captured key_reg to compute
+//      2) When K1 is produced (o_valid_key), current_key captures it.
+//      3) On next round the lpsx_for_m uses the captured current_key to compute
 //         the first message round; at the same time lpsx_for_key is asked to
 //         produce K2. Thus from round 2 onward both lpsx instances work in
 //         parallel: lpsx_for_m consumes previous key while lpsx_for_key
 //         produces the next key.
-//  - WAIT exists to support sequential lpsx_for_key: if lpsx_for_key cannot
-//    complete within the same cycle, WAIT keeps asserting i_valid_key until
-//    o_valid_key appears.
 // -----------------------------------------------------------------------------
 
 module g_transform # (
@@ -75,27 +69,26 @@ const logic [511:0] C[0:11] = {
 // -----------------------------------------------------------------------------
 // Registers
 // -----------------------------------------------------------------------------
-// key_reg : stores last accepted key (updated on o_valid_key)
-// m_reg   : stores current message state (updated each round by lpsx_for_m)
+// current_key : stores last accepted key (updated on o_valid_key)
+// m_reg       : stores current message state (updated each round by lpsx_for_m)
 // m_xor_h_reg : stores (m ^ h) captured at the start of the G-transform
 // -----------------------------------------------------------------------------
-logic [511:0] key_reg;
+logic [511:0] current_key;
 logic [511:0] m_reg;
 logic [511:0] m_xor_h_reg;
 
 // -----------------------------------------------------------------------------
 // LPSX interface signals (two parallel transforms)
-// i_data_a_key / i_data_b_key : inputs for key schedule LPSX
-// i_valid_key : request for key LPSX to start/continue work
-// o_data_key / o_valid_key : produced key and its valid flag
 // -----------------------------------------------------------------------------
+// Key transform interface
 logic [511:0] i_data_a_key;
 logic [511:0] i_data_b_key;
 logic         i_valid_key;
 logic [511:0] o_data_key;
 logic         o_valid_key;
 
-// For m-transform
+// Message transform interface
+logic [511:0] current_m;
 logic [511:0] o_data_m;
 logic         o_valid_m;
 logic         i_valid_m;
@@ -103,11 +96,11 @@ logic         i_valid_m;
 // -----------------------------------------------------------------------------
 // FSM + round counter
 // -----------------------------------------------------------------------------
-// state     : current FSM state (IDLE, RUNNING, WAIT, READY)
-// round_cnt : count of accepted keys (0..12). Semantics: number of keys
-//             already produced and captured in key_reg sequence.
+// state     : current FSM state (IDLE, RUNNING, READY)
+// round_cnt : count of completed rounds (0..12). Semantics: number of keys
+//             already produced and captured in current_key sequence.
 // -----------------------------------------------------------------------------
-typedef enum logic [1:0] {IDLE, RUNNING, WAIT, READY} statetype;
+typedef enum logic [1:0] {IDLE, RUNNING, READY} statetype;
 statetype state, nextstate;
 
 logic [3:0] round_cnt; // needs to represent 0..12
@@ -115,9 +108,9 @@ logic [3:0] round_cnt; // needs to represent 0..12
 // ---------------------------- FSM sequential ---------------------------------
 always_ff @(posedge clk) begin : proc_state
     if (~rst_n) begin
-        state     <= IDLE;
+        state <= IDLE;
     end else begin
-        state     <= nextstate;
+        state <= nextstate;
     end
 end
 
@@ -125,64 +118,43 @@ end
 // FSM combinational
 // -----------------------------------------------------------------------------
 // Next-state logic:
-//  - IDLE: on incoming m (s_axis_m_tvalid) request first key. If the key
-//          appears in the same cycle (o_valid_key), immediately go to RUNNING,
-//          otherwise enter WAIT (keep requesting key).
-//  - RUNNING: when keys keep arriving advance rounds; if no key this cycle go
-//             to WAIT to continue requesting it.
-//  - WAIT:  stay until o_valid_key asserted, then go to RUNNING or READY
+//  - IDLE: on incoming m (s_axis_m_tvalid) request first key and go to RUNNING
+//  - RUNNING: process rounds; when round_cnt reaches 11, go to READY
 //  - READY: present final value for one cycle then IDLE
-//
-// This structure implements the concurrent behaviour:
-//  - first the key LPSX runs to produce K1;
-//  - then in subsequent cycles lpsx_for_m and lpsx_for_key operate in
-//    a pipelined fashion (m-transform consumes previous key while key LPSX
-//    computes the next key).
 // -----------------------------------------------------------------------------
 always_comb begin
     case (state)
         IDLE: begin
             if (s_axis_m_tvalid) begin
-                if (o_valid_key)
-                    nextstate = RUNNING;
-                else
-                    nextstate = WAIT;
-            end
-            else
+                nextstate = RUNNING;
+            end else begin
                 nextstate = IDLE;
-        end
-        RUNNING: begin
-            if (o_valid_key) begin
-                if (round_cnt >= 4'd11)
-                    nextstate = READY;
-                else
-                    nextstate = RUNNING;
             end
-            else
-                nextstate = WAIT;
         end
-        WAIT: begin
-            if (o_valid_key)
-                if (round_cnt >= 4'd12)
-                    nextstate = READY;
-                else
-                    nextstate = RUNNING;
-            else
-                nextstate = WAIT;
+
+        RUNNING: begin
+            if (round_cnt >= 4'd11) begin
+                nextstate = READY;
+            end else begin
+                nextstate = RUNNING;
+            end
         end
-        READY:   nextstate = IDLE; // Present output for one cycle, then back to IDLE
-        default: nextstate = IDLE;
+
+        READY: begin
+            nextstate = IDLE;
+        end
+
+        default: begin
+            nextstate = IDLE;
+        end
     endcase
 end
 
 // -----------------------------------------------------------------------------
 // Round counter logic
 // -----------------------------------------------------------------------------
-// round_cnt tracks number of accepted keys. It is advanced in RUNNING state
-// (on each cycle when keys are accepted); it remains stable in WAIT and is
-// reset on READY/IDLE. This encoding pairs with the FSM above to ensure that
-// both combinational and sequential lpsx_for_key implementations behave
-// correctly: WAIT exists to cover sequential key generation latency.
+// round_cnt tracks number of completed rounds. It is advanced in RUNNING state
+// and reset on READY/IDLE.
 // -----------------------------------------------------------------------------
 always_ff @(posedge clk) begin
     if (~rst_n) begin
@@ -190,92 +162,86 @@ always_ff @(posedge clk) begin
     end else begin
         case (state)
             RUNNING: begin
-                if (round_cnt < 4'd13) round_cnt <= round_cnt + 4'd1;
+                if (round_cnt < 4'd13) begin
+                    round_cnt <= round_cnt + 4'd1;
+                end
             end
-            WAIT: round_cnt <= round_cnt;
+
             READY: begin
                 round_cnt <= 4'd0;
             end
-            default: round_cnt <= 4'd0;
+
+            default: begin
+                round_cnt <= 4'd0;
+            end
         endcase
     end
 end
 
 // -----------------------------------------------------------------------------
-// Latching registers
+// Input capture registers
 // -----------------------------------------------------------------------------
-// key_reg updated on each key result (o_valid_key) — stable storage of last key.
-// This allows lpsx_for_m to read key_reg without race conditions once it
-// has been captured.
-// -----------------------------------------------------------------------------
+// Capture m_xor_h when new message arrives (at beginning of transform)
 always_ff @(posedge clk) begin
     if (~rst_n) begin
-        key_reg <= '0;
-    end else if (o_valid_key) begin
-        // store the produced key
-        key_reg <= o_data_key;
+        m_xor_h_reg <= '0;
+    end else if (state == IDLE) begin
+        m_xor_h_reg <= s_axis_m_tdata ^ i_h_data;
     end
 end
 
-// -----------------------------------------------------------------------------
-// Capture input message block at start (IDLE)
-// - on IDLE + s_axis_m_tvalid latch initial m_reg
-// - afterwards each completed m-transform (o_valid_m) replaces m_reg
-// -----------------------------------------------------------------------------
+// Capture and update message register
 always_ff @(posedge clk) begin
     if (~rst_n) begin
         m_reg <= '0;
-    end else if (state == IDLE && s_axis_m_tvalid) begin
+    end else if (state == IDLE) begin
         // latch incoming message when starting new G-transform
         m_reg <= s_axis_m_tdata;
-    end else if (o_valid_m) begin
+    end else begin
         // each round, m_reg becomes transformed result from lpsx_for_m
         m_reg <= o_data_m;
     end
 end
 
-// store m ^ h when new message arrives (captured at beginning)
-always_ff @(posedge clk) begin
-    if (~rst_n) begin
-        m_xor_h_reg <= '0;
-    end else if (state == IDLE && s_axis_m_tvalid) begin
-        m_xor_h_reg <= s_axis_m_tdata ^ i_h_data;
+// -----------------------------------------------------------------------------
+// Key storage
+// -----------------------------------------------------------------------------
+// current_key updated on each key result (o_valid_key) - stable storage of last key
+generate
+    if (USE_PRECALC) begin
+        assign current_key = o_data_key;
+    end else begin
+        always_ff @(posedge clk) begin
+            if (~rst_n) begin
+                current_key <= '0;
+            end else if (o_valid_key) begin
+                current_key <= o_data_key;
+            end
+        end
     end
-end
+endgenerate
 
+// -----------------------------------------------------------------------------
+// Output logic
 // -----------------------------------------------------------------------------
 // Produce final o_h_data when READY. The final value is computed as:
 //    o_h = last_key ^ last_m_reg ^ (initial_m ^ h)
-// where last_key is the last produced key_reg and last_m_reg is the
-// transformed m after the final round. This follows the algorithm flow.
 // -----------------------------------------------------------------------------
-assign o_h_data = key_reg ^ m_reg ^ m_xor_h_reg;
-
+assign o_h_data = current_key ^ current_m ^ m_xor_h_reg;
 
 // o_h_valid asserted only in READY (one cycle)
 assign o_h_valid = (state == READY);
 
-// -----------------------------------------------------------------------------
 // s_axis_m_tready - accept new message only when IDLE
-// This provides simple flow-control: module accepts a new message only when
-// it is not busy processing a previous one.
-// -----------------------------------------------------------------------------
 assign s_axis_m_tready = (state == IDLE);
 
 // -----------------------------------------------------------------------------
 // LPSX instantiations
 // -----------------------------------------------------------------------------
 // Two independent LPSX instances:
-//  1) lpsx_for_key : drives key schedule. When i_valid_key is asserted it
-//     consumes i_data_a_key / i_data_b_key and eventually asserts o_valid_key
-//     together with o_data_key (the produced key).
-//  2) lpsx_for_m   : consumes current m_reg and key_reg to produce next
-//     message round result (o_data_m / o_valid_m).
-//
-// These two units are intended to work in a pipelined fashion: after K1
-// is available, lpsx_for_m can start using it while lpsx_for_key computes K2.
+//  1) lpsx_for_key : drives key schedule
+//  2) lpsx_for_m   : consumes current m_reg and current_key to produce next message
 // -----------------------------------------------------------------------------
-
 lpsx_transform # (
     .USE_S_RE   (USE_S_RE),
     .USE_PRECALC(USE_PRECALC)
@@ -295,44 +261,43 @@ lpsx_transform # (
 ) lpsx_for_m (
     .clk     (clk),
     .rst_n   (rst_n),
-    .i_data_a(m_reg),
-    .i_data_b(key_reg),
+    .i_data_a(current_m),
+    .i_data_b(current_key),
     .i_valid (i_valid_m),
     .o_data  (o_data_m),
     .o_valid (o_valid_m)
 );
 
 // -----------------------------------------------------------------------------
-// i_valid signals
+// Message input selection
 // -----------------------------------------------------------------------------
-// i_valid_key : request a key operation either when starting (IDLE & s_axis_m_tvalid)
-//               or while RUNNING. WAIT keeps asserting i_valid_key until key
-//               completes (this supports sequential lpsx_for_key).
-//
-// i_valid_m   : enable m-transform during RUNNING. The m-transform consumes
-//               the last captured key_reg (key_reg is updated on o_valid_key).
+// Choose between initial m_reg and transformed m data based on configuration
+// and round counter
+generate
+    if (USE_PRECALC) begin
+        assign current_m = (state == RUNNING && round_cnt == 4'd0) ? m_reg : o_data_m;
+    end else begin
+        assign current_m = m_reg;
+    end
+endgenerate
+
 // -----------------------------------------------------------------------------
+// LPSX control signals
+// -----------------------------------------------------------------------------
+// i_valid_key : request a key operation when starting or during RUNNING
 assign i_valid_key = (state == IDLE && s_axis_m_tvalid) || (state == RUNNING);
-assign i_valid_m   = (state == RUNNING);
 
-// -----------------------------------------------------------------------------
-// i_data_a_key: for first key derivation (in IDLE) use i_h_data; subsequently
-//               use the last accepted key (key_reg) to chain keys.
-// -----------------------------------------------------------------------------
-assign i_data_a_key = (state == IDLE) ? i_h_data : key_reg;
+// i_valid_m : enable m-transform during RUNNING
+assign i_valid_m = (state == RUNNING);
 
-// -----------------------------------------------------------------------------
-// Choose B input (for key schedule):
-//  - IDLE : use i_N_data for the first key request
-//  - RUNNING : for rounds 1..12 use C[round_cnt] (per the module's indexing),
-//
-// Note: the mapping C[round_cnt] follows original convention used here.
-// -----------------------------------------------------------------------------
+// i_data_a_key: for first key use i_h_data; subsequently use current_key
+assign i_data_a_key = (state == IDLE) ? i_h_data : current_key;
+
+// i_data_b_key: choose B input for key schedule
 always_comb begin
     if (state == IDLE) begin
         i_data_b_key = i_N_data;
     end else if (state == RUNNING && round_cnt < 4'd12) begin
-        // For rounds 1..12 use table C[round_cnt] (The counter indexes from zero.)
         i_data_b_key = C[round_cnt];
     end else begin
         i_data_b_key = 512'h0;

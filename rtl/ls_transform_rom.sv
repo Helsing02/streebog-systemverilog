@@ -118,10 +118,11 @@ end
 // Output valid pipelining
 // -----------------------------------------------------------------------------
 always_ff @(posedge clk) begin : proc_valid
-    if (~rst_n)
+    if (~rst_n) begin
         o_valid <= 1'b0;
-    else
+    end else begin
         o_valid <= i_valid;
+    end
 end
 
 // -----------------------------------------------------------------------------
