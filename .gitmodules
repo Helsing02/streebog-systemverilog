@@ -1,0 +1,6 @@
+[submodule "sw/stribog-sw"]
+	path = sw/stribog-sw
+	url = https://github.com/Helsing02/stribog-hash
+[submodule "core/axis_forencich"]
+	path = core/axis_forencich
+	url = https://github.com/alexforencich/verilog-axis

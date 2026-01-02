@@ -14,85 +14,102 @@
 #include <sched.h>
 
 #include "regs.h"
-// #include "stribog.h"
+#include "../stribog-sw/src/hash/stribog.h"
 
-// Конфигурация XDMA устройств
-#define H2C_DEV "/dev/xdma0_h2c_0"
-#define C2H_DEV "/dev/xdma0_c2h_0"
-#define USER_DEV "/dev/xdma0_user"
-#define CONTROL_DEV "/dev/xdma0_control"
+// XDMA Device Configuration
+#define H2C_DEV "/dev/xdma0_h2c_0"      // Host-to-Card DMA channel
+#define C2H_DEV "/dev/xdma0_c2h_0"      // Card-to-Host DMA channel
+#define USER_DEV "/dev/xdma0_user"      // User logic registers
 
-#define INTER_TEST_DELAY_US 1000
+#define INTER_TEST_DELAY_US 1000        // Delay between tests (microseconds)
 
+// Configuration Structures
 
-// Структуры для конфигурации
+// Common configuration shared across all modes
 typedef struct {
-    int device_mode;            // 0=256-bit, 1=512-bit (режим устройства)
-    size_t block_count;         // количество 64-байтовых блоков за операцию
-    int cpu_core;               // привязка к ядру
-    int use_realtime;           // реальное время
-    int verbose;                // подробный вывод
+    int device_mode;            // 0=256-bit, 1=512-bit, -1=random/both
+    size_t block_count;         // Number of 64-byte blocks per transaction
+    int cpu_core;               // CPU core affinity
+    int use_realtime;           // Use real-time scheduling
+    int verbose;                // Verbose output flag
 } common_config_t;
 
+// Test mode configuration
 typedef struct {
     common_config_t common;
-    int validate;               // проверка результатов
+    int validate;               // Enable/disable result validation
 } test_config_t;
 
+// Interactive mode configuration
 typedef struct {
     common_config_t common;
-    // Нет дополнительных параметров для interactive mode
+    // No additional parameters needed for interactive mode
 } interactive_config_t;
 
+// Benchmark mode configuration
 typedef struct {
     common_config_t common;
-    size_t min_size;            // минимальный размер данных
-    size_t max_size;            // максимальный размер данных
-    size_t step_size;           // шаг размера
-    int iterations;             // количество итераций
-    int warmup_iterations;      // прогрев
-    char *output_file;          // файл для результатов
+    size_t min_size;            // Minimum data size for benchmark
+    size_t max_size;            // Maximum data size for benchmark
+    size_t step_size;           // Step size between measurements (0 = exponential)
+    int iterations;             // Number of measurement iterations
+    int warmup_iterations;      // Warmup iterations to stabilize performance
+    char *output_file;          // CSV output file for results
 } bench_config_t;
 
+// Comparison mode configuration (FPGA vs Software)
 typedef struct {
     common_config_t common;
-    size_t min_size;            // минимальный размер данных
-    size_t max_size;            // максимальный размер данных
-    int iterations;             // количество итераций
+    size_t min_size;            // Minimum data size for comparison
+    size_t max_size;            // Maximum data size for comparison
+    int iterations;             // Number of comparison iterations
 } compare_config_t;
 
+// DMA buffer structure for aligned memory allocation
 typedef struct {
-    uint32_t *h2c_buf;
-    uint32_t *c2h_buf;
-    size_t buffer_size;
+    uint32_t *h2c_buf;          // Host-to-Card buffer (aligned to 4096 bytes)
+    uint32_t *c2h_buf;          // Card-to-Host buffer (aligned to 4096 bytes)
+    size_t buffer_size;         // Size of each buffer in bytes
 } dma_buffers_t;
 
+// Benchmark results structure
 typedef struct {
-    size_t data_size;
-    double min_time_ns;
-    double max_time_ns;
-    double avg_time_ns;
-    double median_time_ns;
-    double throughput_mbs;
+    size_t data_size;           // Data size in bytes
+    double min_time_ns;         // Minimum measured time (nanoseconds)
+    double max_time_ns;         // Maximum measured time (nanoseconds)
+    double avg_time_ns;         // Average time (nanoseconds)
+    double median_time_ns;      // Median time (nanoseconds)
+    double throughput_mbs;      // Throughput in MiB/s
 } benchmark_result_t;
 
+// Comparison results structure
 typedef struct {
-    int total_tests;
-    int passed_tests;
-    int failed_tests;
-    double min_time_ns;
-    double max_time_ns;
-    double avg_time_ns;
+    int total_tests;            // Total number of tests performed
+    int passed_tests;           // Number of tests that passed
+    int failed_tests;           // Number of tests that failed
+    double min_time_ns;         // Minimum FPGA execution time
+    double max_time_ns;         // Maximum FPGA execution time
+    double avg_time_ns;         // Average FPGA execution time
 } comparison_results_t;
 
+// XDMA device handle structure
 typedef struct {
-    int fd_h2c;
-    int fd_c2h;
-    int fd_user;
-    volatile uint32_t *regmap;
-    size_t block_count;
+    int fd_h2c;                 // File descriptor for H2C channel
+    int fd_c2h;                 // File descriptor for C2H channel
+    int fd_user;                // File descriptor for user logic
+    volatile uint32_t *regmap;  // Memory-mapped register space
+    size_t block_count;         // Block count for transfers
 } xdma_handle_t;
 
+// XDMA Device Management Functions
+
+/**
+ * Open XDMA devices and map register space
+ *
+ * @param handle Pointer to XDMA handle structure
+ * @param block_count Number of 64-byte blocks per transfer
+ * @return 0 on success, -1 on error
+ */
 int xdma_open(xdma_handle_t *handle, size_t block_count) {
     handle->fd_h2c = open(H2C_DEV, O_WRONLY);
     handle->fd_c2h = open(C2H_DEV, O_RDONLY);
@@ -100,14 +117,15 @@ int xdma_open(xdma_handle_t *handle, size_t block_count) {
     handle->block_count = block_count;
 
     if (handle->fd_h2c < 0 || handle->fd_c2h < 0 || handle->fd_user < 0) {
-        perror("open XDMA devices");
+        perror("Failed to open XDMA devices");
         goto error;
     }
 
+    // Map user logic registers into process memory space
     handle->regmap = (volatile uint32_t *)mmap(NULL, 0x1000, PROT_READ | PROT_WRITE,
-                                              MAP_SHARED, handle->fd_user, CSR_BASE_ADDR);
+                                               MAP_SHARED, handle->fd_user, CSR_BASE_ADDR);
     if (handle->regmap == MAP_FAILED) {
-        perror("mmap");
+        perror("Failed to mmap register space");
         goto error;
     }
 
@@ -120,6 +138,11 @@ error:
     return -1;
 }
 
+/**
+ * Close XDMA devices and unmap register space
+ *
+ * @param handle Pointer to XDMA handle structure
+ */
 void xdma_close(xdma_handle_t *handle) {
     if (handle->regmap != MAP_FAILED && handle->regmap != NULL) {
         munmap((void *)handle->regmap, 0x1000);
@@ -134,15 +157,41 @@ void xdma_close(xdma_handle_t *handle) {
     handle->regmap = NULL;
 }
 
+/**
+ * Get hash size in bytes based on mode
+ *
+ * @param mode 0 for 256-bit (32 bytes), 1 for 512-bit (64 bytes)
+ * @return Hash size in bytes
+ */
 int get_hash_size(int mode) {
-    return mode == 0 ? 32 : 64;
+    if (mode == 0) {
+        return 32;  // 256-bit mode
+    } else if (mode == 1) {
+        return 64;  // 512-bit mode
+    } else {
+        fprintf(stderr, "Warning: Invalid mode %d, defaulting to 512-bit\n", mode);
+        return 64;  // Fallback to 512-bit
+    }
 }
 
-static ssize_t write_blocks(int fd, const void *buf, size_t count, size_t block_count, volatile uint32_t *regmap, int mode) {
+/**
+ * Write data to FPGA with optional block-based transfers
+ *
+ * @param fd File descriptor for H2C channel
+ * @param buf Data buffer to write
+ * @param count Total number of bytes to write
+ * @param block_count Number of 64-byte blocks per transfer (0 for single write)
+ * @param regmap Pointer to memory-mapped registers
+ * @param mode Hash mode (0=256-bit, 1=512-bit)
+ * @return Number of bytes written, or -1 on error
+ */
+static ssize_t write_blocks(int fd, const void *buf, size_t count, size_t block_count,
+                            volatile uint32_t *regmap, int mode) {
+    // Set hash mode in hardware register (must be word-aligned)
     regmap[CSR_MODE_ADDR / 4] = mode;
 
     if (block_count == 0) {
-        // Если block_count не задан, используем стандартную запись
+        // Single write operation
         regmap[CSR_TOTAL_NUM_TRANS_ADDR / 4] = 1;
         return write(fd, buf, count);
     }
@@ -153,43 +202,52 @@ static ssize_t write_blocks(int fd, const void *buf, size_t count, size_t block_
     size_t total_written = 0;
     ssize_t written;
 
-    regmap[CSR_TOTAL_NUM_TRANS_ADDR / 4] = (count + max_write_size - 1) / max_write_size;
+    // Calculate number of DMA transactions needed
+    size_t num_transactions = (count + max_write_size - 1) / max_write_size;
+    regmap[CSR_TOTAL_NUM_TRANS_ADDR / 4] = num_transactions;
+
     while (count > 0) {
         size_t to_write = (count > max_write_size) ? max_write_size : count;
         written = write(fd, data, to_write);
 
-        if (written < 0) {
-            return written; // Ошибка
+        if (written < 0 || (size_t)written < to_write) {
+            perror("write_blocks failed");
+            return total_written + written;
         }
 
         total_written += written;
         data += written;
         count -= written;
-
-        if ((size_t)written < to_write) {
-            break; // Записали меньше, чем планировали
-        }
     }
 
     return total_written;
 }
 
-// Универсальная функция для выполнения операции о вычислению хеша
+/**
+ * Perform complete hash calculation on FPGA
+ *
+ * @param handle XDMA device handle
+ * @param input_data Pointer to input data
+ * @param input_size Size of input data in bytes
+ * @param output_hash Buffer for output hash
+ * @param mode Hash mode (0=256-bit, 1=512-bit)
+ * @return 0 on success, -1 on error
+ */
 int xdma_hash_calc(xdma_handle_t *handle, const void *input_data, size_t input_size,
-                          void *output_hash, int mode) {
+                   void *output_hash, int mode) {
     size_t hash_size = get_hash_size(mode);
 
-    // Записываем данные
+    // Write data to FPGA
     ssize_t written = write_blocks(handle->fd_h2c, input_data, input_size,
                                    handle->block_count, handle->regmap, mode);
-    if (written != input_size) {
+    if (written != (ssize_t)input_size) {
         fprintf(stderr, "Write error: %zd/%zu bytes\n", written, input_size);
         return -1;
     }
 
-    // Читаем результат
+    // Read hash result from FPGA
     ssize_t read_bytes = read(handle->fd_c2h, output_hash, hash_size);
-    if (read_bytes != hash_size) {
+    if (read_bytes != (ssize_t)hash_size) {
         fprintf(stderr, "Read error: %zd/%zu bytes\n", read_bytes, hash_size);
         return -1;
     }
@@ -197,16 +255,16 @@ int xdma_hash_calc(xdma_handle_t *handle, const void *input_data, size_t input_s
     return 0;
 }
 
-// Тестовые векторы
+// Test Vectors (GOST R 34.11-2012 Standard Examples)
+
 typedef struct {
-    const char *name;
-    const uint8_t *input;
-    size_t input_len;
-    const uint8_t *expected_hash_32;
-    const uint8_t *expected_hash_64;
+    const char *name;                   // Test case name
+    const uint8_t *input;               // Input test data
+    size_t input_len;                   // Input length in bytes
+    const uint8_t *expected_hash_32;    // Expected 256-bit hash
+    const uint8_t *expected_hash_64;    // Expected 512-bit hash
 } test_vector_t;
 
-// Тестовые векторы
 static test_vector_t test_vectors[] = {
     {
         .name = "GOST A1 example",
@@ -226,10 +284,10 @@ static test_vector_t test_vectors[] = {
         .expected_hash_64 = (uint8_t*)"\x1e\x88\xe6\x22\x26\xbf\xca\x6f\x99\x94\xf1\xf2\xd5\x15\x69\xe0\xda\xf8\x47\x5a\x3b\x0f\xe6\x1a\x53\x00\xee\xe4\x6d\x96\x13\x76"
                                       "\x03\x5f\xe8\x35\x49\xad\xa2\xb8\x62\x0f\xcd\x7c\x49\x6c\xe5\xb3\x3f\x0c\xb9\xdd\xdc\x2b\x64\x60\x14\x3b\x03\xda\xba\xc9\xfb\x28",
     },
-    {0} // терминатор
+    {0}  // Terminator
 };
 
-// Вспомогательные функции (прототипы)
+// Function Prototypes
 int bind_to_cpu(int cpu_core);
 uint64_t get_nanoseconds(void);
 double calculate_median(double *times, int n);
@@ -238,36 +296,45 @@ void cleanup_dma_buffers(dma_buffers_t *bufs);
 void print_results(const benchmark_result_t *results, int count);
 int save_results_csv(const benchmark_result_t *results, int count, const char *filename);
 
-// Реализация функций режимов
+// Test Mode Implementation
+
+/**
+ * Run test mode: verify FPGA implementation against standard test vectors
+ *
+ * @param config Test configuration
+ * @return 0 if all tests pass, 1 if any test fails
+ */
 int run_test_mode(test_config_t *config) {
-    printf("\n=== TEST MODE ===\n");
+    printf("\n=== TEST MODE (Verification) ===\n");
 
     dma_buffers_t bufs = {0};
     xdma_handle_t device = {0};
     int result = 1;
 
+    // Initialize DMA buffers (8KB should be enough for test vectors)
     if (init_dma_buffers(&bufs, 8192) != 0) {
         fprintf(stderr, "Failed to initialize DMA buffers\n");
         return 1;
     }
 
+    // Open XDMA devices
     if (xdma_open(&device, config->common.block_count) != 0) {
         cleanup_dma_buffers(&bufs);
         return 1;
     }
 
-    // Определяем какие режимы тестировать
+    // Determine which modes to test
     int modes_to_test[2];
     int mode_count = 0;
 
     if (config->common.device_mode == -1) {
-        // Тестируем оба режима
-        modes_to_test[0] = 0;
-        modes_to_test[1] = 1;
+        // Test both modes
+        modes_to_test[0] = 0;  // 256-bit
+        modes_to_test[1] = 1;  // 512-bit
         mode_count = 2;
         printf("Testing both modes: 256-bit and 512-bit\n");
     } else {
-        // Тестируем только указанный режим
+        // Test only specified mode
         modes_to_test[0] = config->common.device_mode;
         mode_count = 1;
         printf("Testing %d-bit mode only\n", get_hash_size(config->common.device_mode) * 8);
@@ -275,28 +342,30 @@ int run_test_mode(test_config_t *config) {
 
     int total_passed = 0, total_tests = 0;
 
+    // Test each mode
     for (int mode_idx = 0; mode_idx < mode_count; mode_idx++) {
         int current_mode = modes_to_test[mode_idx];
         int hash_size = get_hash_size(current_mode);
         const uint8_t *expected_hash;
 
         if (mode_count > 1) {
-            printf("\n--- %d-bit Mode Tests ---\n", get_hash_size(current_mode));
+            printf("\n--- %d-bit Mode Tests ---\n", hash_size * 8);
         }
 
         int mode_passed = 0, mode_tests = 0;
 
+        // Run all test vectors for this mode
         for (int i = 0; test_vectors[i].name != NULL; i++) {
             test_vector_t *vec = &test_vectors[i];
 
-            // Выбираем правильный ожидаемый хеш в зависимости от режима
+            // Select expected hash based on mode
             if (current_mode == 0) {
                 expected_hash = vec->expected_hash_32;
             } else {
                 expected_hash = vec->expected_hash_64;
             }
 
-            // Проверяем, что ожидаемый хеш не NULL
+            // Skip if expected hash is not available for this mode
             if (expected_hash == NULL) {
                 printf("Test %d: %s...SKIP (no expected hash for this mode)\n",
                        mode_tests + 1, vec->name);
@@ -306,23 +375,27 @@ int run_test_mode(test_config_t *config) {
             printf("Test %d: %s...", mode_tests + 1, vec->name);
             fflush(stdout);
 
-            // Запись данных в FPGA и чтение результата
+            // Prepare input data
             memcpy(bufs.h2c_buf, vec->input, vec->input_len);
+
+            // Calculate hash on FPGA
             if (xdma_hash_calc(&device, bufs.h2c_buf, vec->input_len,
                                bufs.c2h_buf, current_mode) != 0) {
-                printf("FAIL (hash calc operation failed)\n");
+                printf("FAIL (hash calculation failed)\n");
                 mode_tests++;
                 continue;
             }
 
-            // Проверка результата
+            // Validate result
             if (config->validate && memcmp(bufs.c2h_buf, expected_hash, hash_size) != 0) {
                 printf("FAIL (hash mismatch)\n");
                 if (config->common.verbose) {
                     printf("  Expected: ");
-                    for (size_t j = 0; j < hash_size; j++) printf("%02x", expected_hash[j]);
+                    for (size_t j = 0; j < hash_size; j++)
+                        printf("%02x", expected_hash[j]);
                     printf("\n  Got:      ");
-                    for (size_t j = 0; j < hash_size; j++) printf("%02x", ((uint8_t*)bufs.c2h_buf)[j]);
+                    for (size_t j = 0; j < hash_size; j++)
+                        printf("%02x", ((uint8_t*)bufs.c2h_buf)[j]);
                     printf("\n");
                 }
             } else {
@@ -334,7 +407,7 @@ int run_test_mode(test_config_t *config) {
         }
 
         printf("%d-bit Mode Results: %d/%d tests passed\n",
-               get_hash_size(current_mode), mode_passed, mode_tests);
+               hash_size * 8, mode_passed, mode_tests);
 
         total_passed += mode_passed;
         total_tests += mode_tests;
@@ -345,18 +418,32 @@ int run_test_mode(test_config_t *config) {
 
     result = (total_passed == total_tests) ? 0 : 1;
 
-cleanup:
+    // Cleanup
     xdma_close(&device);
     cleanup_dma_buffers(&bufs);
     return result;
 }
 
+// Comparison Mode Implementation
+
+/**
+ * Run comparison mode: compare FPGA results with software implementation
+ *
+ * @param config Comparison configuration
+ * @return 0 if all comparisons match, 1 if any mismatch
+ */
 int run_compare_mode(const compare_config_t *config) {
     printf("\n=== COMPARISON MODE (FPGA vs Software) ===\n");
 
     dma_buffers_t bufs = {0};
     xdma_handle_t device = {0};
     int result = 1;
+
+    // Validate configuration
+    if (config->min_size > config->max_size) {
+        fprintf(stderr, "Error: min_size cannot be larger than max_size\n");
+        return 1;
+    }
 
     size_t max_buffer_size = config->max_size;
     if (init_dma_buffers(&bufs, max_buffer_size) != 0) {
@@ -384,17 +471,19 @@ int run_compare_mode(const compare_config_t *config) {
 
     srand(time(NULL));
 
+    // Run comparison iterations
     for (int i = 0; i < config->iterations; i++) {
-        // Выбор режима для этой итерации
+        // Select mode for this iteration
         int current_mode;
         if (use_random_mode) {
-            current_mode = rand() & 0x1; // 0 или 1
+            current_mode = rand() & 0x1;  // Random 0 or 1
         } else {
             current_mode = config->common.device_mode;
         }
 
         size_t hash_size = get_hash_size(current_mode);
 
+        // Generate random data size within range
         size_t data_size;
         if (config->min_size == config->max_size) {
             data_size = config->min_size;
@@ -402,31 +491,30 @@ int run_compare_mode(const compare_config_t *config) {
             data_size = config->min_size + rand() % (config->max_size - config->min_size + 1);
         }
 
-        // Генерация случайных данных
+        // Generate random test data
         for (size_t j = 0; j < data_size; j++) {
             ((uint8_t*)bufs.h2c_buf)[j] = rand() & 0xFF;
         }
 
-        // Вычисление хеша на FPGA
+        // FPGA hash calculation with timing
         uint64_t start_fpga = get_nanoseconds();
-
         int fpga_result = xdma_hash_calc(&device, bufs.h2c_buf, data_size,
                                          bufs.c2h_buf, current_mode);
         uint64_t end_fpga = get_nanoseconds();
         double fpga_time = (double)(end_fpga - start_fpga);
 
         if (fpga_result != 0) {
-            printf("Iteration %d: hash calc operation failed\n", i + 1);
+            printf("Iteration %d: FPGA hash calculation failed\n", i + 1);
             results.failed_tests++;
             results.total_tests++;
             continue;
         }
 
-        // Вычисление хеша программно
+        // Software hash calculation with timing
         uint64_t start_sw = get_nanoseconds();
 
         stribog_ctx_t ctx;
-        uint8_t sw_hash[64];
+        uint8_t sw_hash[64];  // Buffer for both 256-bit and 512-bit hashes
 
         stribog_init(&ctx, (current_mode == 0) ? 256 : 512);
         stribog_update(&ctx, (uint8_t*)bufs.h2c_buf, data_size);
@@ -435,7 +523,7 @@ int run_compare_mode(const compare_config_t *config) {
         uint64_t end_sw = get_nanoseconds();
         double sw_time = (double)(end_sw - start_sw);
 
-        // Сравнение результатов
+        // Compare results
         int match = memcmp(bufs.c2h_buf, sw_hash, hash_size) == 0;
 
         if (match) {
@@ -461,13 +549,17 @@ int run_compare_mode(const compare_config_t *config) {
         results.total_tests++;
         total_time += fpga_time;
 
-        if (i == 0 || fpga_time < results.min_time_ns) results.min_time_ns = fpga_time;
-        if (fpga_time > results.max_time_ns) results.max_time_ns = fpga_time;
+        // Update min/max times
+        if (i == 0 || fpga_time < results.min_time_ns)
+            results.min_time_ns = fpga_time;
+        if (fpga_time > results.max_time_ns)
+            results.max_time_ns = fpga_time;
     }
 
+    // Calculate statistics
     results.avg_time_ns = total_time / config->iterations;
 
-    // Красивый вывод результатов
+    // Display results in table format
     printf("\n" "═" "╡ RESULTS ╞" "═" "═══════════════════════════════\n");
     printf("┌──────────────────────┬─────────────┐\n");
     printf("│ Metric               │ Value       │\n");
@@ -485,18 +577,32 @@ int run_compare_mode(const compare_config_t *config) {
 
     result = (results.failed_tests == 0) ? 0 : 1;
 
-cleanup:
+    // Cleanup
     xdma_close(&device);
     cleanup_dma_buffers(&bufs);
     return result;
 }
 
+// Benchmark Mode Implementation
+
+/**
+ * Run benchmark mode: measure FPGA performance across different data sizes
+ *
+ * @param config Benchmark configuration
+ * @return 0 on success, 1 on error
+ */
 int run_bench_mode(bench_config_t *config) {
-    printf("\n=== BENCHMARK MODE ===\n");
+    printf("\n=== BENCHMARK MODE (Performance Measurement) ===\n");
 
     dma_buffers_t bufs = {0};
     xdma_handle_t device = {0};
     int result = 1;
+
+    // Validate configuration
+    if (config->min_size > config->max_size) {
+        fprintf(stderr, "Error: min_size cannot be larger than max_size\n");
+        return 1;
+    }
 
     if (init_dma_buffers(&bufs, config->max_size) != 0) {
         fprintf(stderr, "Failed to initialize DMA buffers\n");
@@ -516,7 +622,7 @@ int run_bench_mode(bench_config_t *config) {
         printf("Mode: Fixed %d-bit\n", get_hash_size(config->common.device_mode) * 8);
     }
 
-    // Подготовка размеров данных
+    // Calculate number of different sizes to test
     int num_sizes = 0;
     size_t size = config->min_size;
 
@@ -525,7 +631,7 @@ int run_bench_mode(bench_config_t *config) {
         if (config->step_size > 0) {
             size += config->step_size;
         } else {
-            size *= 2;
+            size *= 2;  // Exponential scaling
         }
     }
 
@@ -535,23 +641,25 @@ int run_bench_mode(bench_config_t *config) {
         goto cleanup;
     }
 
-    // Прогрев
-    printf("Warming up...\n");
+    // Warmup phase to stabilize performance
+    printf("Warming up (%d iterations)...\n", config->warmup_iterations);
     for (int i = 0; i < config->warmup_iterations; i++) {
-       xdma_hash_calc(&device, bufs.h2c_buf, 1024, bufs.c2h_buf, config->common.device_mode);
+        xdma_hash_calc(&device, bufs.h2c_buf, 1024, bufs.c2h_buf,
+                       (config->common.device_mode == -1) ? 1 : config->common.device_mode);
     }
 
-    // Основные измерения
+    // Main measurement loop
     int result_count = 0;
     size = config->min_size;
+    srand(time(NULL));  // Seed random number generator for random mode
 
     for (int i = 0; i < num_sizes; i++) {
         printf("Testing %9zu bytes...", size);
         fflush(stdout);
 
-        // Генерация тестовых данных (совместимо с софтварным бенчмарком)
+        // Generate reproducible test data (pseudo-random)
         for (size_t j = 0; j < size/sizeof(uint32_t); j++) {
-            bufs.h2c_buf[j] = (j * 2654435761UL);
+            bufs.h2c_buf[j] = (j * 2654435761UL);  // Knuth multiplicative hash
         }
 
         double *times = malloc(config->iterations * sizeof(double));
@@ -562,17 +670,18 @@ int run_bench_mode(bench_config_t *config) {
 
         double sum = 0.0, min = 1e20, max = 0.0;
 
+        // Measure performance for this data size
         for (int iter = 0; iter < config->iterations; iter++) {
-            // Выбор режима для этой итерации
+            // Select mode for this iteration
             int current_mode;
             if (use_random_mode) {
-                current_mode = rand() & 0x1; // 0 или 1
+                current_mode = rand() & 0x1;  // Random 0 or 1
             } else {
                 current_mode = config->common.device_mode;
             }
 
             uint64_t start = get_nanoseconds();
-            // Запись + чтение = один полный цикл обработки
+            // Perform hash calculation
             xdma_hash_calc(&device, bufs.h2c_buf, size, bufs.c2h_buf, current_mode);
             uint64_t end = get_nanoseconds();
 
@@ -584,13 +693,13 @@ int run_bench_mode(bench_config_t *config) {
             if (time_ns > max) max = time_ns;
         }
 
+        // Calculate statistics
         double avg = sum / config->iterations;
         double median = calculate_median(times, config->iterations);
         double throughput = (size / (1024.0 * 1024.0)) / (avg / 1e9);  // MiB/s
-
-        // Также считаем хешей в секунду
         double hashes_per_second = 1e9 / avg;
 
+        // Store results
         results[result_count] = (benchmark_result_t){
             .data_size = size,
             .min_time_ns = min,
@@ -605,20 +714,21 @@ int run_bench_mode(bench_config_t *config) {
 
         free(times);
 
-        // Следующий размер
+        // Calculate next data size
         if (config->step_size > 0) {
             size += config->step_size;
         } else {
             size *= 2;
         }
 
-        if (size < config->min_size) break; // защита от переполнения
+        if (size < config->min_size) break;  // Overflow protection
     }
 
-    // Вывод результатов
+    // Display results
     printf("\n=== FPGA Benchmark Results ===\n");
     print_results(results, result_count);
 
+    // Save results to CSV file if requested
     if (config->output_file) {
         save_results_csv(results, result_count, config->output_file);
     }
@@ -631,14 +741,28 @@ cleanup:
     return result;
 }
 
+// Interactive Mode Implementation
+
+/**
+ * Run interactive mode: manual testing with user input
+ *
+ * @param config Interactive configuration
+ * @return 0 on success, 1 on error
+ */
 int run_interactive_mode(interactive_config_t *config) {
-    printf("\n=== INTERACTIVE MODE ===\n");
+    printf("\n=== INTERACTIVE MODE (Manual Testing) ===\n");
     printf("Enter data in hex format (e.g., '48656c6c6f' for 'Hello')\n");
     printf("Type 'quit' to exit\n\n");
 
     dma_buffers_t bufs = {0};
     xdma_handle_t device = {0};
     int result = 0;
+
+    // Validate device mode
+    if (config->common.device_mode == -1) {
+        config->common.device_mode = 1;  // Default to 512-bit mode
+        printf("Note: Using default 512-bit mode\n");
+    }
 
     if (init_dma_buffers(&bufs, 8192) != 0) {
         fprintf(stderr, "Failed to initialize DMA buffers\n");
@@ -651,14 +775,27 @@ int run_interactive_mode(interactive_config_t *config) {
     }
 
     char input[4096];
+    int hash_size = get_hash_size(config->common.device_mode);
+
     while (1) {
         printf("Input (hex): ");
         if (!fgets(input, sizeof(input), stdin)) break;
 
-        if (strncmp(input, "quit", 4) == 0) break;
+        // Remove trailing newline
+        size_t input_len = strlen(input);
+        if (input_len > 0 && input[input_len - 1] == '\n') {
+            input[--input_len] = '\0';
+        }
 
-        // Конвертация hex строки в бинарные данные
-        size_t input_len = strlen(input) - 1; // минус newline
+        // Check for quit command
+        if (strcmp(input, "quit") == 0) break;
+
+        // Validate input
+        if (input_len == 0) {
+            printf("Error: Empty input\n");
+            continue;
+        }
+
         if (input_len % 2 != 0) {
             printf("Error: Hex string must have even length\n");
             continue;
@@ -670,37 +807,49 @@ int run_interactive_mode(interactive_config_t *config) {
             continue;
         }
 
-        // Конвертация hex -> binary
+        // Convert hex string to binary
         for (size_t i = 0; i < binary_len; i++) {
-            sscanf(&input[i*2], "%2hhx", &((uint8_t*)bufs.h2c_buf)[i]);
+            unsigned int byte;
+            if (sscanf(&input[i*2], "%2x", &byte) != 1) {
+                printf("Error: Invalid hex character at position %zu\n", i*2);
+                break;
+            }
+            ((uint8_t*)bufs.h2c_buf)[i] = (uint8_t)byte;
         }
 
-         // Выполнение операции
+        // Perform hash calculation
         uint64_t start = get_nanoseconds();
         int op_result = xdma_hash_calc(&device, bufs.h2c_buf, binary_len,
                                         bufs.c2h_buf, config->common.device_mode);
         uint64_t end = get_nanoseconds();
 
         if (op_result != 0) {
-            printf("Error: hash calc operation failed\n");
+            printf("Error: Hash calculation failed\n");
             continue;
         }
 
-        // Вывод результата
+        // Display results
         printf("Hash: ");
-        for (int i = 0; i < 64; i++) {
+        for (int i = 0; i < hash_size; i++) {
             printf("%02x", ((uint8_t*)bufs.c2h_buf)[i]);
         }
         printf("\nTime: %.2f us\n\n", (end - start) / 1000.0);
     }
 
-cleanup:
+    // Cleanup
     xdma_close(&device);
     cleanup_dma_buffers(&bufs);
     return result;
 }
 
-// Вспомогательные функции (реализации)
+// Utility Functions
+
+/**
+ * Bind process to specific CPU core
+ *
+ * @param cpu_core CPU core number (0-based)
+ * @return 0 on success, -1 on error
+ */
 int bind_to_cpu(int cpu_core) {
 #ifdef __linux__
     if (cpu_core >= 0) {
@@ -712,13 +861,18 @@ int bind_to_cpu(int cpu_core) {
             printf("✓ Bound to CPU core %d\n", cpu_core);
             return 0;
         } else {
-            perror("pthread_setaffinity_np");
+            perror("Failed to set CPU affinity");
         }
     }
 #endif
     return -1;
 }
 
+/**
+ * Set real-time scheduling priority
+ *
+ * @return 0 on success, -1 on error
+ */
 int set_realtime_priority(void) {
 #ifdef __linux__
     struct sched_param param = {.sched_priority = 50};
@@ -727,13 +881,18 @@ int set_realtime_priority(void) {
         printf("✓ Set real-time scheduling (SCHED_FIFO, priority=50)\n");
         return 0;
     } else {
-        perror("sched_setscheduler");
+        perror("Failed to set real-time scheduling");
         return -1;
     }
 #endif
     return -1;
 }
 
+/**
+ * Get high-resolution timestamp in nanoseconds
+ *
+ * @return Timestamp in nanoseconds
+ */
 uint64_t get_nanoseconds(void) {
     struct timespec ts;
 #ifdef CLOCK_MONOTONIC_RAW
@@ -744,6 +903,13 @@ uint64_t get_nanoseconds(void) {
     return (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
 }
 
+/**
+ * Calculate median of an array of doubles
+ *
+ * @param times Array of time measurements
+ * @param n Number of elements in array
+ * @return Median value
+ */
 double calculate_median(double *times, int n) {
     if (n == 0) return 0.0;
 
@@ -752,7 +918,7 @@ double calculate_median(double *times, int n) {
 
     memcpy(copy, times, n * sizeof(double));
 
-    // Простая bubble sort для медианы
+    // Simple bubble sort (acceptable for small n ≤ 100)
     for (int i = 0; i < n-1; i++) {
         for (int j = 0; j < n-i-1; j++) {
             if (copy[j] > copy[j+1]) {
@@ -771,17 +937,24 @@ double calculate_median(double *times, int n) {
     return median;
 }
 
+/**
+ * Initialize DMA buffers with proper alignment
+ *
+ * @param bufs Pointer to DMA buffers structure
+ * @param size Buffer size in bytes
+ * @return 0 on success, -1 on error
+ */
 int init_dma_buffers(dma_buffers_t *bufs, size_t size) {
-    // Выровненные буферы для DMA
     if (size == 0) return -1;
 
+    // Allocate aligned memory for DMA (4096-byte alignment required)
     if (posix_memalign((void**)&bufs->h2c_buf, 4096, size) != 0) {
-        perror("posix_memalign h2c_buf");
+        perror("Failed to allocate H2C buffer");
         return -1;
     }
 
     if (posix_memalign((void**)&bufs->c2h_buf, 4096, size) != 0) {
-        perror("posix_memalign c2h_buf");
+        perror("Failed to allocate C2H buffer");
         free(bufs->h2c_buf);
         return -1;
     }
@@ -793,6 +966,11 @@ int init_dma_buffers(dma_buffers_t *bufs, size_t size) {
     return 0;
 }
 
+/**
+ * Clean up DMA buffers
+ *
+ * @param bufs Pointer to DMA buffers structure
+ */
 void cleanup_dma_buffers(dma_buffers_t *bufs) {
     if (bufs->h2c_buf) free(bufs->h2c_buf);
     if (bufs->c2h_buf) free(bufs->c2h_buf);
@@ -801,12 +979,13 @@ void cleanup_dma_buffers(dma_buffers_t *bufs) {
     bufs->buffer_size = 0;
 }
 
-// Функции парсинга аргументов для каждой подкоманды
+// Usage Help Functions
+
 void print_test_usage(const char *program_name) {
     printf("Usage: %s test [OPTIONS]\n\n", program_name);
     printf("Run predefined test vectors for Stribog hash algorithm\n\n");
     printf("Options:\n");
-    printf("  -d, --device-mode MODE   0=256-bit hash, 1=512-bit hash (default: 1)\n");
+    printf("  -d, --device-mode MODE   0=256-bit hash, 1=512-bit hash (default: -1=both)\n");
     printf("  -b, --block-count N      Number of 64-byte blocks per write (default: 0)\n");
     printf("  -c, --cpu CORE           Bind to CPU core\n");
     printf("  -r, --realtime           Use real-time scheduling\n");
@@ -819,7 +998,7 @@ void print_bench_usage(const char *program_name) {
     printf("Usage: %s bench [OPTIONS]\n\n", program_name);
     printf("Performance benchmarking mode\n\n");
     printf("Options:\n");
-    printf("  -d, --device-mode MODE   0=256-bit hash, 1=512-bit hash (default: 1)\n");
+    printf("  -d, --device-mode MODE   0=256-bit hash, 1=512-bit hash (default: -1=random)\n");
     printf("  -b, --block-count N      Number of 64-byte blocks per write (default: 0)\n");
     printf("  -c, --cpu CORE           Bind to CPU core\n");
     printf("  -r, --realtime           Use real-time scheduling\n");
@@ -849,7 +1028,7 @@ void print_compare_usage(const char *program_name) {
     printf("Usage: %s compare [OPTIONS]\n\n", program_name);
     printf("Compare FPGA implementation with software\n\n");
     printf("Options:\n");
-    printf("  -d, --device-mode MODE   0=256-bit hash, 1=512-bit hash (default: 1)\n");
+    printf("  -d, --device-mode MODE   0=256-bit hash, 1=512-bit hash (default: -1=random)\n");
     printf("  -b, --block-count N      Number of 64-byte blocks per write (default: 0)\n");
     printf("  -c, --cpu CORE           Bind to CPU core\n");
     printf("  -r, --realtime           Use real-time scheduling\n");
@@ -871,7 +1050,8 @@ void print_general_usage(const char *program_name) {
     printf("\nUse '%s <command> --help' for more information on a specific command.\n", program_name);
 }
 
-// Парсинг аргументов для каждой подкоманды
+// Command Line Parsing Functions
+
 int parse_test_options(int argc, char *argv[], test_config_t *config) {
     static struct option long_options[] = {
         {"device-mode", required_argument, 0, 'd'},
@@ -888,12 +1068,12 @@ int parse_test_options(int argc, char *argv[], test_config_t *config) {
     while ((opt = getopt_long(argc, argv, "d:b:c:rvh", long_options, NULL)) != -1) {
         switch (opt) {
             case 'd': config->common.device_mode = atoi(optarg); break;
-            case 'b': config->common.block_count = atol(optarg); break;
+            case 'b': config->common.block_count = strtoul(optarg, NULL, 0); break;
             case 'c': config->common.cpu_core = atoi(optarg); break;
             case 'r': config->common.use_realtime = 1; break;
             case 'v': config->common.verbose = 1; break;
             case 'h': print_test_usage(argv[0]); exit(0);
-            case 0: config->validate = 0; break; // --no-validate
+            case 0: config->validate = 0; break;  // --no-validate
             default: return 1;
         }
     }
@@ -921,12 +1101,12 @@ int parse_bench_options(int argc, char *argv[], bench_config_t *config) {
     while ((opt = getopt_long(argc, argv, "d:b:c:rs:S:t:i:w:o:vh", long_options, NULL)) != -1) {
         switch (opt) {
             case 'd': config->common.device_mode = atoi(optarg); break;
-            case 'b': config->common.block_count = atol(optarg); break;
+            case 'b': config->common.block_count = strtoul(optarg, NULL, 0); break;
             case 'c': config->common.cpu_core = atoi(optarg); break;
             case 'r': config->common.use_realtime = 1; break;
-            case 's': config->min_size = atol(optarg); break;
-            case 'S': config->max_size = atol(optarg); break;
-            case 't': config->step_size = atol(optarg); break;
+            case 's': config->min_size = strtoul(optarg, NULL, 0); break;
+            case 'S': config->max_size = strtoul(optarg, NULL, 0); break;
+            case 't': config->step_size = strtoul(optarg, NULL, 0); break;
             case 'i': config->iterations = atoi(optarg); break;
             case 'w': config->warmup_iterations = atoi(optarg); break;
             case 'o': config->output_file = strdup(optarg); break;
@@ -953,7 +1133,7 @@ int parse_interactive_options(int argc, char *argv[], interactive_config_t *conf
     while ((opt = getopt_long(argc, argv, "d:b:c:rvh", long_options, NULL)) != -1) {
         switch (opt) {
             case 'd': config->common.device_mode = atoi(optarg); break;
-            case 'b': config->common.block_count = atol(optarg); break;
+            case 'b': config->common.block_count = strtoul(optarg, NULL, 0); break;
             case 'c': config->common.cpu_core = atoi(optarg); break;
             case 'r': config->common.use_realtime = 1; break;
             case 'v': config->common.verbose = 1; break;
@@ -982,11 +1162,11 @@ int parse_compare_options(int argc, char *argv[], compare_config_t *config) {
     while ((opt = getopt_long(argc, argv, "d:b:c:rs:S:i:vh", long_options, NULL)) != -1) {
         switch (opt) {
             case 'd': config->common.device_mode = atoi(optarg); break;
-            case 'b': config->common.block_count = atol(optarg); break;
+            case 'b': config->common.block_count = strtoul(optarg, NULL, 0); break;
             case 'c': config->common.cpu_core = atoi(optarg); break;
             case 'r': config->common.use_realtime = 1; break;
-            case 's': config->min_size = atol(optarg); break;
-            case 'S': config->max_size = atol(optarg); break;
+            case 's': config->min_size = strtoul(optarg, NULL, 0); break;
+            case 'S': config->max_size = strtoul(optarg, NULL, 0); break;
             case 'i': config->iterations = atoi(optarg); break;
             case 'v': config->common.verbose = 1; break;
             case 'h': print_compare_usage(argv[0]); exit(0);
@@ -996,6 +1176,12 @@ int parse_compare_options(int argc, char *argv[], compare_config_t *config) {
     return 0;
 }
 
+/**
+ * Print benchmark results in formatted table
+ *
+ * @param results Array of benchmark results
+ * @param count Number of results
+ */
 void print_results(const benchmark_result_t *results, int count) {
     printf("\n%12s %14s %14s %14s %14s %12s\n",
            "Size (bytes)", "Min (ns)", "Max (ns)", "Avg (ns)", "Median (ns)", "Throughput (MB/s)");
@@ -1010,6 +1196,14 @@ void print_results(const benchmark_result_t *results, int count) {
     }
 }
 
+/**
+ * Save benchmark results to CSV file
+ *
+ * @param results Array of benchmark results
+ * @param count Number of results
+ * @param filename Output CSV filename
+ * @return 0 on success, -1 on error
+ */
 int save_results_csv(const benchmark_result_t *results, int count, const char *filename) {
     FILE *f = fopen(filename, "w");
     if (!f) {
@@ -1031,7 +1225,8 @@ int save_results_csv(const benchmark_result_t *results, int count, const char *f
     return 0;
 }
 
-// Главная функция
+// Main Function
+
 int main(int argc, char *argv[]) {
     if (argc < 2) {
         print_general_usage(argv[0]);
@@ -1040,9 +1235,9 @@ int main(int argc, char *argv[]) {
 
     const char *command = argv[1];
 
-    // Общая настройка для всех команд
+    // Default configuration for all commands
     common_config_t common_defaults = {
-        .device_mode = -1,
+        .device_mode = -1,      // -1 means "both" for test, "random" for bench/compare
         .block_count = 0,
         .cpu_core = -1,
         .use_realtime = 0,
@@ -1051,6 +1246,7 @@ int main(int argc, char *argv[]) {
 
     int result = 0;
 
+    // Parse and execute appropriate command
     if (strcmp(command, "test") == 0) {
         test_config_t config = {
             .common = common_defaults,
@@ -1062,7 +1258,7 @@ int main(int argc, char *argv[]) {
             return 1;
         }
 
-        // Настройка окружения
+        // Set up environment
         if (config.common.use_realtime) {
             bind_to_cpu(config.common.cpu_core >= 0 ? config.common.cpu_core : 0);
             set_realtime_priority();
@@ -1088,6 +1284,13 @@ int main(int argc, char *argv[]) {
             return 1;
         }
 
+        // Validate configuration
+        if (config.min_size > config.max_size) {
+            fprintf(stderr, "Error: min_size cannot be larger than max_size\n");
+            return 1;
+        }
+
+        // Set up environment
         if (config.common.use_realtime) {
             bind_to_cpu(config.common.cpu_core >= 0 ? config.common.cpu_core : 0);
             set_realtime_priority();
@@ -1102,12 +1305,14 @@ int main(int argc, char *argv[]) {
         interactive_config_t config = {
             .common = common_defaults
         };
+        config.common.device_mode = 1;  // Default to 512-bit for interactive mode
 
         if (parse_interactive_options(argc - 1, argv + 1, &config) != 0) {
             print_interactive_usage(argv[0]);
             return 1;
         }
 
+        // Set up environment
         if (config.common.use_realtime) {
             bind_to_cpu(config.common.cpu_core >= 0 ? config.common.cpu_core : 0);
             set_realtime_priority();
@@ -1130,6 +1335,13 @@ int main(int argc, char *argv[]) {
             return 1;
         }
 
+        // Validate configuration
+        if (config.min_size > config.max_size) {
+            fprintf(stderr, "Error: min_size cannot be larger than max_size\n");
+            return 1;
+        }
+
+        // Set up environment
         if (config.common.use_realtime) {
             bind_to_cpu(config.common.cpu_core >= 0 ? config.common.cpu_core : 0);
             set_realtime_priority();
@@ -1143,7 +1355,7 @@ int main(int argc, char *argv[]) {
         print_general_usage(argv[0]);
         return 0;
     } else {
-        fprintf(stderr, "Unknown command: %s\n\n", command);
+        fprintf(stderr, "Error: Unknown command: %s\n\n", command);
         print_general_usage(argv[0]);
         return 1;
     }

@@ -15,6 +15,6 @@ interface = axil
 generator = Verilog
 
 [c_header]
-path = corsair_sw/regs.h
+path = sw/streebog-hw-driver/regs.h
 prefix = CSR
 generator = CHeader
