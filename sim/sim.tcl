@@ -1,33 +1,51 @@
-# Центральный симуляционный скрипт
+# ------------------------------------------------------------------------------
+# Main Simulation Script for RTL Verification
+#
+# This script automates compilation and simulation of SystemVerilog testbenches.
+# Usage: do sim.tcl <module_name>
+# ------------------------------------------------------------------------------
 
-# Получение аргументов
+# ------------------------------------------------------------------------------
+# ARGUMENT PARSING
+# ------------------------------------------------------------------------------
+# Check command line arguments
 if { $argc < 1 } {
-    puts "Usage: do sim.tcl <module_name> ?<run_time>? ?PARAM=<value>?"
+    puts "Usage: do sim.tcl <module_name>"
+    puts "Example: do sim.tcl adder_512bit"
     exit 1
 }
 
+# Get the module name to test
 quietly set module_name $1
-quietly set run_time ""
-quietly set param_value ""
 
-# Настройка путей
+# ------------------------------------------------------------------------------
+# DIRECTORY SETUP
+# ------------------------------------------------------------------------------
+# Define all relevant paths for the project
+# RTL source directory
 quietly set RTL_DIR "../rtl"
+# Testbench directory for this module
 quietly set TB_DIR "./$module_name"
-quietly set UVM_DIR "./uvm"
+# Simulation library location
 quietly set WORK_LIB "$TB_DIR/work"
+# External IP directory
 quietly set AXIS_LIB "../core/axis_forencich/rtl"
+# SW streebog .c file
+quietly set STREEBOG_C_SRC "../sw/src/hash/stribog.c"
 
-quietly set DPI_SRC_DIR "../sw/src"
-quietly set STREEBOG_C "$DPI_SRC_DIR/hash/stribog.c"
-
-# Рекурсивный поиск всех SystemVerilog файлов
+# ------------------------------------------------------------------------------
+# HELPER PROCEDURE: FIND SYSTEMVERILOG FILES
+# ------------------------------------------------------------------------------
+# Recursively searches for all .sv files in a directory
 proc find_sv_files {dir} {
     set files {}
     if {[file exists $dir]} {
         foreach item [glob -nocomplain -directory $dir *] {
             if {[file isdirectory $item]} {
+                # Recursive call for subdirectories
                 set files [concat $files [find_sv_files $item]]
-            } elseif {[string match *.sv $item] || [string match *.svh $item]} {
+            } elseif {[string match *.sv $item]} {
+                # Add SystemVerilog files to the list
                 lappend files $item
             }
         }
@@ -35,79 +53,82 @@ proc find_sv_files {dir} {
     return $files
 }
 
-# Очистка предыдущей симуляции
+# ------------------------------------------------------------------------------
+# CLEANUP PREVIOUS SIMULATION
+# ------------------------------------------------------------------------------
+# Remove existing library to ensure clean simulation run
 if {[file exists $WORK_LIB]} {
+    puts "Cleaning previous simulation library..."
     file delete -force $WORK_LIB
 }
 
-# Создаем рабочую библиотеку
+# ------------------------------------------------------------------------------
+# CREATE NEW SIMULATION LIBRARY
+# ------------------------------------------------------------------------------
+# Create and map the working library
 vlib $WORK_LIB
 vmap work $WORK_LIB
+puts "Created simulation library: $WORK_LIB"
 
-# Поиск и компиляция всех RTL файлов
+# ------------------------------------------------------------------------------
+# COMPILE RTL SOURCES
+# ------------------------------------------------------------------------------
+# Find and compile all SystemVerilog files in the RTL directory
 quietly set rtl_files [find_sv_files $RTL_DIR]
+
 if {[llength $rtl_files] == 0} {
     puts "WARNING: No SystemVerilog files found in $RTL_DIR"
 } else {
-    puts "Compiling RTL files:"
+    puts "Compiling RTL files..."
     foreach file $rtl_files {
-        puts "  $file"
+        puts "  [file tail $file]"
         vlog -work $WORK_LIB -sv $file
     }
-
+    puts "RTL compilation complete.\n"
 }
 
-# Forencich
+# ------------------------------------------------------------------------------
+# COMPILE EXTERNAL COMPONENTS
+# ------------------------------------------------------------------------------
+# Compile required external IP blocks and utilities
+puts "Compiling external components..."
+# AXI-Stream register
 vlog -work $WORK_LIB -sv "$AXIS_LIB/axis_register.v"
-
-# glbl
+# Global simulation model for Xilinx
 vlog -work $WORK_LIB -sv "../core/xilinx/glbl.v"
 
-
-# Проверка существования файлов
+# ------------------------------------------------------------------------------
+# COMPILE TESTBENCH
+# ------------------------------------------------------------------------------
+# Verify testbench exists and compile it
 quietly set tb_file "$TB_DIR/tb_${module_name}.sv"
 
 if {![file exists $tb_file]} {
     puts "ERROR: Testbench file not found: $tb_file"
+    puts "Expected testbench at: $TB_DIR/"
     exit 1
 }
 
-puts "Compiling Testbench: $tb_file"
-vlog -work $WORK_LIB -sv $tb_file -dpiheader dpi_types.h $STREEBOG_C
+puts "Compiling testbench: [file tail $tb_file]"
+vlog -work $WORK_LIB -sv $tb_file
+vlog -work $WORK_LIB -sv $tb_file -dpiheader dpi_types.h $STREEBOG_C_SRC
+puts "Testbench compilation complete.\n"
 
-# Подготовка команды симуляции
-set vsim_cmd "vsim +initreg+0 +initmem+0 -voptargs=+acc -L work work.glbl work.tb_${module_name} -L unisims_ver -t 1ns +UVM_TESTNAME=regression_test +UVM_LOG_LEVEL=UVM_LOW"
+# ------------------------------------------------------------------------------
+# LAUNCH SIMULATION
+# ------------------------------------------------------------------------------
+# Configure and start the simulation
+set vsim_cmd "vsim -voptargs=+acc -L work work.glbl work.tb_${module_name} -L unisims_ver -t 1ns"
+puts "Starting simulation with command:"
+puts "  $vsim_cmd\n"
 
-if { $param_value != "" } {
-    append vsim_cmd " -gPARAM=$param_value"
-}
-
-puts "Running simulation: $vsim_cmd"
 eval $vsim_cmd
 
-# Добавляем волны по умолчанию
-# add wave *
-# add wave -position insertpoint sim:/tb_adder_512bit/*
-# add wave -position insertpoint sim:/tb_${module_name}/dut/Sigma_adder/*
-# add wave -position insertpoint sim:/tb_${module_name}/dut/*
-# add wave -position insertpoint sim:/tb_${module_name}/dut_dsp/*
-# add wave -position insertpoint sim:/tb_${module_name}/dut_precalc/*
-# add wave -position insertpoint sim:/tb_${module_name}/dut/rom*
-# add wave -position insertpoint sim:/tb_${module_name}/dut/g_instance/*
-# set signals {"main_nextstate" "main_state" "block_hash_nextstate" "block_hash_state" "g_instance/nextstate" "g_instance/state" "g_instance/s_axis_m_tdata" "g_instance/s_axis_m_tvalid"}
-# foreach signal $signals {
-#     add wave -position insertpoint sim:/tb_${module_name}/dut/$signal
-# }
+# ------------------------------------------------------------------------------
+# RUN SIMULATION
+# ------------------------------------------------------------------------------
+# Execute the simulation until $finish is called
+puts "Running simulation until \$finish..."
+run -all
 
-
-# Запуск симуляции
-puts "Runtime: $run_time"
-if { $run_time != "" } {
-    puts "Running for $run_time..."
-    run $run_time
-} else {
-    puts "Running until \$finish/stop..."
-    run -all
-}
-
-puts "Simulation completed."
+puts "\nSimulation completed successfully."
