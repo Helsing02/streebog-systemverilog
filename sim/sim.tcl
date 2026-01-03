@@ -31,7 +31,7 @@ quietly set WORK_LIB "$TB_DIR/work"
 # External IP directory
 quietly set AXIS_LIB "../core/axis_forencich/rtl"
 # SW streebog .c file
-quietly set STREEBOG_C_SRC "../sw/src/hash/stribog.c"
+quietly set STREEBOG_C_SRC "../sw/stribog-sw/src/hash/stribog.c"
 
 # ------------------------------------------------------------------------------
 # HELPER PROCEDURE: FIND SYSTEMVERILOG FILES
